@@ -1,2 +1,114 @@
 # sensor_fusion_ttc_comparison
+
 Track objects over time and estimate their TTC using lidar and camera data
+
+## Dependencies
+
+- CMake >= 4.4.2
+- OpenCV >= 5.0.0
+- yaml-cpp library (for parsing COCO class names from YAML files)
+- C++11 compatible compiler
+
+## Tested Environment
+
+This project has been tested on **macOS Sequoia 26.6.1** using Homebrew for package management.
+
+> **Note:** The Linux setup instructions below are provided as reference only and have **not been tested**. 
+> Linux support is not currently within the scope of this project.
+
+## Model Files
+
+### YOLOv7-tiny ONNX Model (Recommended)
+
+This project uses a compressed YOLOv7-tiny ONNX model to limit bandwidth and data needed for setup. The model file `yolov7-tiny.onnx.gz` (~20-25MB) is included in the repository. It will provide reasonable box detections for the objects in the provided scene. As a side effect its faster to execute just because of its smaller size than the full YOLOv7.
+
+**Setup Steps:**
+
+1. **Decompress the model** (required before running):
+   ```bash
+   # Navigate to the yolo data directory
+   cd dat/yolo/
+   
+   # Decompress the model
+   gunzip -k yolov7-tiny.onnx.gz
+   
+   # Expected output:
+   # This creates yolov7-tiny.onnx (approximately 24MB) in the same directory
+   # The -k flag keeps the original .gz file
+   ```
+
+2. **Verify the file exists:**
+   ```bash
+   ls -lh dat/yolo/yolov7-tiny.onnx
+   # Expected output: -rw-r--r--  1 user  staff   24M [date] yolov7-tiny.onnx
+   ```
+
+3. **The code will automatically load** `dat/yolo/yolov7-tiny.onnx` at runtime.
+
+> **Note:** The repository includes `yolov7-tiny.onnx.gz` to reduce bandwidth. GitHub's free tier supports files up to 100MB without requiring Git LFS, so no additional configuration is needed.
+
+### Other ONNX models with OpenCV 5+
+The code supports other ONNX models. But it needs an input size of 640x640 and 3 channels (RGB images).
+
+How uo use:
+1. Download an ONNX model (e.g., from [ONNX Model Zoo](https://github.com/onnx/models/tree/main/vision/object_detection_segmentation/yolov3) or [Hugging Face](https://huggingface.co/models?search=yolov3))
+2. Place the `.onnx` file in `dat/yolo/` directory
+3. Update the model filename in `src/FinalProject_Camera.cpp` (line 60)
+
+## Setup
+
+### macOS (Homebrew) - *only tested system*
+
+```bash
+# Install CMake (minimum 4.4.2)
+brew install cmake
+
+# Install OpenCV 5.x
+brew install opencv@5
+
+# Install yaml-cpp for YAML file parsing (COCO class names)
+brew install yaml-cpp
+
+# Clone and build
+cd sensor_fusion_ttc_comparison
+mkdir build && cd build
+# Note: If OpenCV 5 or yaml-cpp is not found, set the paths explicitly
+CMAKE_PREFIX_PATH=/opt/homebrew/opt/opencv:/opt/homebrew/opt/yaml-cpp cmake ..
+make
+```
+
+### Linux (apt) - *not tested*
+
+> **Note:** These instructions have not been tested and are provided as reference only.
+> Linux support is currently not within the project scope.
+
+```bash
+# Install CMake (minimum 4.4.2)
+sudo apt-get install cmake
+
+# Install OpenCV 5.x (from source or PPA)
+sudo apt-get install libopencv-dev
+
+# Install yaml-cpp for YAML file parsing
+sudo apt-get install libyaml-cpp-dev
+
+# Clone and build
+cd sensor_fusion_ttc_comparison
+mkdir build && cd build
+cmake ..
+make
+```
+
+## ONNX Model Information
+
+The YOLOv7-tiny ONNX model (`yolov7-tiny.onnx`) is converted from the original github repo pytorch model via the projects export.py script:
+
+TORCH_FORCE_WEIGHTS_ONLY_LOAD=0 uv run python export.py --weights yolov7-tiny.pt --grid --simplify --img-size 640 640 --max-wh 640
+
+### Preprocessing
+- Normalize image to [0, 1] range
+- Resize to 640x640 using letterbox (maintain aspect ratio with padding)
+- no mean subtraction
+
+### Postprocessing
+Use opencv 5's Non-Max Suppression (NMS) with the output tensors to get final detections.

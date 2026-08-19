@@ -39,6 +39,8 @@
 *.out
 *.app
 
+*.DS_*
+
 # Build directories
 build/
 Build/
@@ -57,6 +59,7 @@ compile_commands.json
 *.log
 *.bak
 *.swp
+aufg*.*
 
 # vcpkg
 vcpkg_installed/
@@ -67,3 +70,13 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Python utils subproject (uv-managed)
+utils/
+
+# Prevent checking in large onnx files. Use the gzip compressed versions in this repo
+# The decompressed yolov7-tiny.onnx should NOT be committed (it's generated from .gz)
+*.onnx
+
+# Large version of the yolov7 model, currently only tiny is used!
+yolov7.onnx.gz
