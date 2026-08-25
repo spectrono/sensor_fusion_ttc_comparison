@@ -16,12 +16,18 @@
 #include <opencv2/xfeatures2d/nonfree.hpp>
 
 #include "dataStructures.h"
-#include "matching2D.hpp"
 #include "objectDetection2D.hpp"
 #include "lidarData.hpp"
 #include "camFusion.hpp"
 
+// Keypoint library from previous project - modern detector/descriptor implementations
+#include "keypoint_lib/detection.hpp"
+#include "keypoint_lib/descriptors.hpp"
+#include "keypoint_lib/matching.hpp"
+#include "keypoint_lib/analysis.hpp"
+
 using namespace std;
+using namespace kp;
 
 
 /* MAIN PROGRAM */
@@ -40,6 +46,34 @@ int main(int argc, const char *argv[])
     int imgEndIndex = 18;   // last file index to load
     int imgStepWidth = 1; 
     int imgFillWidth = 4;  // no. of digits which make up the file index (e.g. img-0001.png)
+
+    // Comprehensive testing mode: test all detector-descriptor combinations
+    bool bTestAllCombinations = false;
+    
+    // For comprehensive testing: store results for each combination
+    struct CombinationResult {
+        string detectorType;
+        string descriptorType;
+        int imageIndex;
+        int keypointCount;
+        cv::Size descriptorSize;
+        double detectionTimeMs;
+        double descriptorTimeMs;
+    };
+    std::vector<CombinationResult> combinationResults;
+    
+    // For FP.1 analysis: store bounding box match data
+    struct BBMatchData {
+        int frameIndex;
+        int prevBoxId;
+        int currBoxId;
+        int matchCount;
+    };
+    std::vector<BBMatchData> bbMatchResults;
+    
+    // Current detector and descriptor types for CSV export
+    std::string currentDetectorType = "SHITOMASI";
+    std::string currentDescriptorType = "ORB";
 
     
     // Load class names from coco.yaml
@@ -171,14 +205,14 @@ int main(int argc, const char *argv[])
         // Visualize 3D objects
         if(bVis)
         {
-            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true);
+            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), false);
         }
 
         cout << "#4 : CLUSTER LIDAR POINT CLOUD done" << endl;
         
         
-        // REMOVE THIS LINE BEFORE PROCEEDING WITH THE FINAL PROJECT
-        continue; // skips directly to the next image without processing what comes beneath
+        // REMOVED: continue statement to enable keypoint processing
+        // continue; // skips directly to the next image without processing what comes beneath
 
         /* DETECT IMAGE KEYPOINTS */
 
@@ -186,48 +220,94 @@ int main(int argc, const char *argv[])
         cv::Mat imgGray;
         cv::cvtColor((dataBuffer.end()-1)->cameraImg, imgGray, cv::COLOR_BGR2GRAY);
 
-        // extract 2D keypoints from current image
-        vector<cv::KeyPoint> keypoints; // create empty feature list for current image
-        string detectorType = "SHITOMASI";
+        /* DETECT IMAGE KEYPOINTS */
 
-        if (detectorType.compare("SHITOMASI") == 0)
+        // Get all available detector and descriptor types from keypoint_lib
+        const auto& allDetectorTypes = getAllDetectorTypes();
+        const auto& allDescriptorTypes = desc::getAllDescriptorTypes();
+
+        if (bTestAllCombinations)
         {
-            detKeypointsShiTomasi(keypoints, imgGray, false);
+            // Test all detector-descriptor combinations
+            cout << "=== Testing all detector-descriptor combinations ===" << endl;
+            cout << "Detectors: ";
+            for (const auto& det : allDetectorTypes) cout << det << " ";
+            cout << endl << "Descriptors: ";
+            for (const auto& desc : allDescriptorTypes) cout << desc << " ";
+            cout << endl << endl;
+
+            for (const auto& detectorType : allDetectorTypes)
+            {
+                for (const auto& descriptorType : allDescriptorTypes)
+                {
+                    vector<cv::KeyPoint> keypoints;
+                    cv::Mat descriptors;
+
+                    // Detect keypoints with timing
+                    double t = static_cast<double>(cv::getTickCount());
+                    detectKeypoints(keypoints, imgGray, detectorType, false);
+                    t = (static_cast<double>(cv::getTickCount()) - t) / cv::getTickFrequency();
+                    double detectionTimeMs = 1000.0 * t;
+
+                    // Extract descriptors with timing
+                    double t2 = static_cast<double>(cv::getTickCount());
+                    desc::descKeypoints(keypoints, imgGray, descriptors, descriptorType, false);
+                    t2 = (static_cast<double>(cv::getTickCount()) - t2) / cv::getTickFrequency();
+                    double descriptorTimeMs = 1000.0 * t2;
+
+                    // Record results
+                    CombinationResult result;
+                    result.detectorType = detectorType;
+                    result.descriptorType = descriptorType;
+                    result.imageIndex = imgStartIndex + imgIndex;
+                    result.keypointCount = static_cast<int>(keypoints.size());
+                    result.descriptorSize = descriptors.size();
+                    result.detectionTimeMs = detectionTimeMs;
+                    result.descriptorTimeMs = descriptorTimeMs;
+                    combinationResults.push_back(result);
+
+                    cout << "  [" << detectorType << "/" << descriptorType << "] "
+                         << keypoints.size() << " keypoints, "
+                         << descriptors.size() << " descriptors (det=" << detectionTimeMs << "ms, desc=" << descriptorTimeMs << "ms)" << endl;
+                }
+            }
+            cout << "=== End of combination testing ===" << endl << endl;
+
+            // Use first combination for the rest of the pipeline
+            string detectorType = allDetectorTypes[0];
+            string descriptorType = allDescriptorTypes[0];
+            
+            // Re-detect with first combination for pipeline
+            detectKeypoints((dataBuffer.end() - 1)->keypoints, imgGray, detectorType, false);
+            desc::descKeypoints((dataBuffer.end() - 1)->keypoints, imgGray, (dataBuffer.end() - 1)->descriptors, descriptorType, false);
         }
         else
         {
-            //...
-        }
+            // Single detector-descriptor as before
+            vector<cv::KeyPoint> keypoints;
+            string detectorType = "SHITOMASI";
+            detectKeypoints(keypoints, imgGray, detectorType, false);
 
-        // optional : limit number of keypoints (helpful for debugging and learning)
-        bool bLimitKpts = false;
-        if (bLimitKpts)
-        {
-            int maxKeypoints = 50;
-
-            if (detectorType.compare("SHITOMASI") == 0)
-            { // there is no response info, so keep the first 50 as they are sorted in descending quality order
-                keypoints.erase(keypoints.begin() + maxKeypoints, keypoints.end());
+            // optional : limit number of keypoints (helpful for debugging and learning)
+            bool bLimitKpts = false;
+            if (bLimitKpts)
+            {
+                int maxKeypoints = 50;
+                if (detectorType == "SHITOMASI")
+                { // there is no response info, so keep the first 50 as they are sorted in descending quality order
+                    keypoints.erase(keypoints.begin() + maxKeypoints, keypoints.end());
+                }
+                cv::KeyPointsFilter::retainBest(keypoints, maxKeypoints);
+                cout << " NOTE: Keypoints have been limited!" << endl;
             }
-            cv::KeyPointsFilter::retainBest(keypoints, maxKeypoints);
-            cout << " NOTE: Keypoints have been limited!" << endl;
-        }
 
-        // push keypoints and descriptor for current frame to end of data buffer
-        (dataBuffer.end() - 1)->keypoints = keypoints;
+            (dataBuffer.end() - 1)->keypoints = keypoints;
+            
+            string descriptorType = "ORB";
+            desc::descKeypoints((dataBuffer.end() - 1)->keypoints, imgGray, (dataBuffer.end() - 1)->descriptors, descriptorType, false);
+        }
 
         cout << "#5 : DETECT KEYPOINTS done" << endl;
-
-
-        /* EXTRACT KEYPOINT DESCRIPTORS */
-
-        cv::Mat descriptors;
-        string descriptorType = "BRISK"; // BRISK, BRIEF, ORB, FREAK, AKAZE, SIFT
-        descKeypoints((dataBuffer.end() - 1)->keypoints, (dataBuffer.end() - 1)->cameraImg, descriptors, descriptorType);
-
-        // push descriptors for current frame to end of data buffer
-        (dataBuffer.end() - 1)->descriptors = descriptors;
-
         cout << "#6 : EXTRACT DESCRIPTORS done" << endl;
 
 
@@ -238,12 +318,13 @@ int main(int argc, const char *argv[])
 
             vector<cv::DMatch> matches;
             string matcherType = "MAT_BF";        // MAT_BF, MAT_FLANN
-            string descriptorType = "DES_BINARY"; // DES_BINARY, DES_HOG
+            string descriptorCategory = "DES_BINARY"; // DES_BINARY, DES_HOG
             string selectorType = "SEL_NN";       // SEL_NN, SEL_KNN
+            float ratioThreshold = 0.8f;           // Ratio threshold for Lowe's test
 
-            matchDescriptors((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints,
-                             (dataBuffer.end() - 2)->descriptors, (dataBuffer.end() - 1)->descriptors,
-                             matches, descriptorType, matcherType, selectorType);
+            match::matchDescriptors((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints,
+                                      (dataBuffer.end() - 2)->descriptors, (dataBuffer.end() - 1)->descriptors,
+                                      matches, descriptorCategory, matcherType, selectorType, ratioThreshold);
 
             // store matches in current data frame
             (dataBuffer.end() - 1)->kptMatches = matches;
@@ -261,6 +342,62 @@ int main(int argc, const char *argv[])
 
             // store matches in current data frame
             (dataBuffer.end()-1)->bbMatches = bbBestMatches;
+            
+            // Collect match counts for FP.1 analysis
+            // Count matches between bounding boxes for CSV export
+            std::map<std::pair<int, int>, int> matchCounts;
+            for (const auto &match : matches)
+            {
+                const cv::KeyPoint &prevKp = (dataBuffer.end()-2)->keypoints[match.queryIdx];
+                const cv::KeyPoint &currKp = (dataBuffer.end()-1)->keypoints[match.trainIdx];
+
+                int prevBoxID = -1;
+                for (const auto &prevBB : (dataBuffer.end()-2)->boundingBoxes)
+                {
+                    if (prevBB.roi.contains(prevKp.pt))
+                    {
+                        prevBoxID = prevBB.boxID;
+                        break;
+                    }
+                }
+
+                int currBoxID = -1;
+                for (const auto &currBB : (dataBuffer.end()-1)->boundingBoxes)
+                {
+                    if (currBB.roi.contains(currKp.pt))
+                    {
+                        currBoxID = currBB.boxID;
+                        break;
+                    }
+                }
+
+                if (prevBoxID != -1 && currBoxID != -1)
+                {
+                    matchCounts[{prevBoxID, currBoxID}]++;
+                }
+            }
+            
+            // Store match data for CSV export
+            for (const auto &pair : bbBestMatches)
+            {
+                int prevBoxID = pair.first;
+                int currBoxID = pair.second;
+                int count = matchCounts[{prevBoxID, currBoxID}];
+                
+                bbMatchResults.push_back({
+                    static_cast<int>(imgStartIndex + imgIndex),
+                    prevBoxID,
+                    currBoxID,
+                    count
+                });
+            }
+            
+            // Optional: Print bounding box match information
+            bool bPrintBBMatchInfo = true;
+            if (bPrintBBMatchInfo)
+            {
+                printBBMatchInfo(bbBestMatches, *(dataBuffer.end()-2), *(dataBuffer.end()-1), matches);
+            }
 
             cout << "#8 : TRACK 3D OBJECT BOUNDING BOXES done" << endl;
 
@@ -329,6 +466,75 @@ int main(int argc, const char *argv[])
         }
 
     } // eof loop over all images
+
+    // Save combination test results to CSV for Python evaluation
+    if (bTestAllCombinations && !combinationResults.empty())
+    {
+        std::string csvFilename = "./detector_descriptor_results.csv";
+        std::ofstream csvFile(csvFilename);
+        
+        if (csvFile.is_open())
+        {
+            // Write CSV header
+            csvFile << "ImageIndex,Detector,Descriptor,KeypointCount,DescriptorRows,DescriptorCols,DescriptorType,DetectionTimeMs,DescriptorTimeMs\n";
+            
+            // Write data rows
+            for (const auto& result : combinationResults)
+            {
+                csvFile << result.imageIndex << ","
+                        << result.detectorType << ","
+                        << result.descriptorType << ","
+                        << result.keypointCount << ","
+                        << result.descriptorSize.height << ","
+                        << result.descriptorSize.width << ","
+                        << (result.descriptorSize.width * 8) << "," // descriptor type size in bits
+                        << std::fixed << std::setprecision(2)
+                        << result.detectionTimeMs << ","
+                        << result.descriptorTimeMs << "\n";
+            }
+            
+            csvFile.close();
+            std::cout << "\nCombination test results saved to " << csvFilename << std::endl;
+            std::cout << "Total combinations tested: " << combinationResults.size() << std::endl;
+            std::cout << "(7 detectors x 5 descriptors x " << (imgEndIndex - imgStartIndex + 1) << " images = " 
+                      << combinationResults.size() << " results)" << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Save FP.1 bounding box match results to CSV for Python analysis
+    if (!bbMatchResults.empty())
+    {
+        std::string bbCsvFilename = "bb_matches.csv";
+        std::ofstream bbCsvFile(bbCsvFilename);
+        
+        if (bbCsvFile.is_open())
+        {
+            // Write CSV header
+            bbCsvFile << "frame_index,prev_box_id,curr_box_id,match_count\n";
+            
+            // Write data rows
+            for (const auto& result : bbMatchResults)
+            {
+                bbCsvFile << result.frameIndex << ","
+                          << result.prevBoxId << ","
+                          << result.currBoxId << ","
+                          << result.matchCount << "\n";
+            }
+            
+            bbCsvFile.close();
+            std::cout << "\nFP.1 Bounding box match results saved to " << bbCsvFilename << std::endl;
+            std::cout << "Total matches recorded: " << bbMatchResults.size() << std::endl;
+            std::cout << "Use: python analysis/fp1_analysis.py --csv " << bbCsvFilename << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << bbCsvFilename << " for writing" << std::endl;
+        }
+    }
 
     return 0;
 }

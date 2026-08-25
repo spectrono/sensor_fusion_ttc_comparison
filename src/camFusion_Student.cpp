@@ -137,7 +137,21 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 // associate a given bounding box with the keypoints it contains
 void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches)
 {
-    // ...
+    // Clear the keypoint matches for this bounding box
+    boundingBox.kptMatches.clear();
+
+    // For each keypoint match, check if current keypoint is within this bounding box's ROI
+    for (const auto &match : kptMatches)
+    {
+        const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+
+        // Check if current keypoint is within the bounding box ROI
+        if (boundingBox.roi.contains(currKp.pt))
+        {
+            // Add the match to the bounding box's kptMatches
+            boundingBox.kptMatches.push_back(match);
+        }
+    }
 }
 
 
@@ -156,7 +170,118 @@ void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
 }
 
 
+// Helper function: Find bounding box ID that contains a given point
+// Returns -1 if no bounding box contains the point
+inline int findBBIdByPoint(const std::vector<BoundingBox> &bounding_boxes, const cv::Point2f &pt)
+{
+    auto it = std::find_if(
+        bounding_boxes.begin(),
+        bounding_boxes.end(),
+        [&pt](const BoundingBox &bb) { return bb.roi.contains(pt); });
+
+    return (it != bounding_boxes.end()) ? it->boxID : -1;
+}
+
+
+// FP.1 - Match bounding boxes between previous and current frame based on keypoint correspondences
 void matchBoundingBoxes(std::vector<cv::DMatch> &matches, std::map<int, int> &bbBestMatches, DataFrame &prevFrame, DataFrame &currFrame)
 {
-    // ...
+    // Clear output map
+    bbBestMatches.clear();
+
+    // Step 1: Count matches between bounding boxes
+    // Structure: prevBoxID -> (currBoxID -> matchCount)
+    std::map<int, std::map<int, int>> bbMatchCounts;
+
+    for (const auto &match : matches)
+    {
+        const cv::KeyPoint &prevKp = prevFrame.keypoints[match.queryIdx];
+        const cv::KeyPoint &currKp = currFrame.keypoints[match.trainIdx];
+
+        int prevBoxID = findBBIdByPoint(prevFrame.boundingBoxes, prevKp.pt);
+        int currBoxID = findBBIdByPoint(currFrame.boundingBoxes, currKp.pt);
+
+        if (prevBoxID != -1 && currBoxID != -1)
+        {
+            bbMatchCounts[prevBoxID][currBoxID]++;
+        }
+    }
+
+    // Step 2: For each previous bounding box, find the current bounding box with most matches
+    for (const auto &prevBB : prevFrame.boundingBoxes)
+    {
+        int prevBoxID = prevBB.boxID;
+
+        if (bbMatchCounts.count(prevBoxID))
+        {
+            // Find the currBoxID with the maximum count
+            auto best = std::max_element(
+                bbMatchCounts[prevBoxID].begin(),
+                bbMatchCounts[prevBoxID].end(),
+                [](const auto &a, const auto &b)
+                { return a.second < b.second; });
+            
+            bbBestMatches[prevBoxID] = best->first;
+        }
+    }
+}
+
+// Helper function to print bounding box match information
+// Shows which prev boxes matched to which curr boxes and the match counts
+void printBBMatchInfo(const std::map<int, int> &bbBestMatches, 
+                      const DataFrame &prevFrame, 
+                      const DataFrame &currFrame,
+                      const std::vector<cv::DMatch> &matches)
+{
+    std::cout << "Bounding Box Match Information:" << std::endl;
+    
+    if (bbBestMatches.empty())
+    {
+        std::cout << "  No matches found" << std::endl;
+        return;
+    }
+    
+    // Build a map of match counts: (prevBoxID, currBoxID) -> count
+    std::map<std::pair<int, int>, int> matchCounts;
+    for (const auto &match : matches)
+    {
+        const cv::KeyPoint &prevKp = prevFrame.keypoints[match.queryIdx];
+        const cv::KeyPoint &currKp = currFrame.keypoints[match.trainIdx];
+        
+        int prevBoxID = -1;
+        for (const auto &prevBB : prevFrame.boundingBoxes)
+        {
+            if (prevBB.roi.contains(prevKp.pt))
+            {
+                prevBoxID = prevBB.boxID;
+                break;
+            }
+        }
+        
+        int currBoxID = -1;
+        for (const auto &currBB : currFrame.boundingBoxes)
+        {
+            if (currBB.roi.contains(currKp.pt))
+            {
+                currBoxID = currBB.boxID;
+                break;
+            }
+        }
+        
+        if (prevBoxID != -1 && currBoxID != -1)
+        {
+            matchCounts[{prevBoxID, currBoxID}]++;
+        }
+    }
+    
+    // Print matches
+    for (const auto &matchPair : bbBestMatches)
+    {
+        int prevBoxID = matchPair.first;
+        int currBoxID = matchPair.second;
+        int count = matchCounts[{prevBoxID, currBoxID}];
+        
+        std::cout << "  Prev BB " << prevBoxID << " -> Curr BB " << currBoxID 
+                  << " (" << count << " keypoint matches)" << std::endl;
+    }
 }

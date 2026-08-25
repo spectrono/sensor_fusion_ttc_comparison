@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 4.4.2 FATAL_ERROR)
 
-add_definitions(-std=c++11)
+add_definitions(-std=c++17)
 
 set(CXX_FLAGS "-Wall")
 set(CMAKE_CXX_FLAGS, "${CXX_FLAGS}")
@@ -19,10 +19,18 @@ if(NOT yaml-cpp_DIR AND EXISTS "/opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp")
 endif()
 find_package(yaml-cpp REQUIRED)
 
-include_directories(${OpenCV_INCLUDE_DIRS} ${YAML_CPP_INCLUDE_DIRS})
+include_directories(${OpenCV_INCLUDE_DIRS} ${YAML_CPP_INCLUDE_DIRS} src)
 link_directories(${OpenCV_LIBRARY_DIRS})
 add_definitions(${OpenCV_DEFINITIONS})
 
 # Executable for create matrix exercise
-add_executable (3D_object_tracking src/camFusion_Student.cpp src/FinalProject_Camera.cpp src/lidarData.cpp src/matching2D_Student.cpp src/objectDetection2D.cpp)
+add_executable (3D_object_tracking 
+    src/camFusion_Student.cpp 
+    src/FinalProject_Camera.cpp 
+    src/lidarData.cpp 
+    src/objectDetection2D.cpp
+)
 target_link_libraries (3D_object_tracking ${OpenCV_LIBRARIES} yaml-cpp::yaml-cpp)
+
+# Include directories
+include_directories(${OpenCV_INCLUDE_DIRS} ${YAML_CPP_INCLUDE_DIRS} src src/keypoint_lib)

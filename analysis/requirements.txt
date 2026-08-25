@@ -1,0 +1,7 @@
+# FP.1 Analysis Python Dependencies
+# Install with: pip install -r requirements.txt
+
+pandas>=1.0.0
+seaborn>=0.11.0
+matplotlib>=3.0.0
+numpy>=1.18.0
