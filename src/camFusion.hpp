@@ -4,9 +4,18 @@
 
 #include <stdio.h>
 #include <vector>
+#include <map>
 #include <opencv2/core.hpp>
 #include "dataStructures.h"
 
+
+// TTC computation methods for Lidar-based TTC calculation
+enum class TTCMethod
+{
+    UNFILTERED,        // Raw mean of all X-coordinates
+    PERCENTILE_MEAN,   // Remove first and last 10% of sorted X values, then use mean
+    PERCENTILE_MEDIAN  // Remove first and last 10% of sorted X values, then use median
+};
 
 void clusterLidarWithROI(std::vector<BoundingBox> &boundingBoxes, std::vector<LidarPoint> &lidarPoints, float shrinkFactor, cv::Mat &P_rect_xx, cv::Mat &R_rect_xx, cv::Mat &RT);
 void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches);
@@ -17,6 +26,16 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 
 void computeTTCCamera(std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr,
                       std::vector<cv::DMatch> kptMatches, double frameRate, double &TTC, cv::Mat *visImg=nullptr);
+
+// Main Lidar TTC computation with method selection
 void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
-                     std::vector<LidarPoint> &lidarPointsCurr, double frameRate, double &TTC);                  
+                     std::vector<LidarPoint> &lidarPointsCurr, double frameRate, double &TTC,
+                     TTCMethod method = TTCMethod::PERCENTILE_MEDIAN);
+
+// Helper function for percentile filtering
+std::vector<double> filterPercentiles(
+    const std::vector<double>& values, 
+    double lowerPercentile,
+    double upperPercentile);
+
 #endif /* camFusion_hpp */

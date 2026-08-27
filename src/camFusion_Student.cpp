@@ -163,10 +163,139 @@ void computeTTCCamera(std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPo
 }
 
 
-void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
-                     std::vector<LidarPoint> &lidarPointsCurr, double frameRate, double &TTC)
+// Helper: Filter values by percentile range (remove first/last N%)
+std::vector<double> filterPercentiles(
+    const std::vector<double>& values, 
+    double lowerPercentile,
+    double upperPercentile)
 {
-    // ...
+    if (values.empty()) return {};
+    
+    std::vector<double> sorted = values;
+    std::sort(sorted.begin(), sorted.end());
+    
+    size_t lowerIdx = static_cast<size_t>(lowerPercentile * sorted.size());
+    size_t upperIdx = static_cast<size_t>(upperPercentile * sorted.size());
+    
+    // Ensure we have at least one element
+    if (lowerIdx >= sorted.size()) lowerIdx = sorted.size() - 1;
+    if (upperIdx >= sorted.size()) upperIdx = sorted.size() - 1;
+    if (lowerIdx > upperIdx) lowerIdx = upperIdx;
+    
+    return std::vector<double>(sorted.begin() + lowerIdx, sorted.begin() + upperIdx + 1);
+}
+
+
+// Main TTC computation with method selection
+void computeTTCLidar(std::vector<LidarPoint> &lidarPointsPrev,
+                     std::vector<LidarPoint> &lidarPointsCurr, 
+                     double frameRate,
+                     double &TTC,
+                     TTCMethod method)
+{
+    // Handle empty input
+    if (lidarPointsPrev.empty() || lidarPointsCurr.empty())
+    {
+        TTC = std::numeric_limits<double>::quiet_NaN();
+        return;
+    }
+    
+    // Extract X coordinates (forward distance in meters)
+    std::vector<double> prevX, currX;
+    for (const auto& pt : lidarPointsPrev) prevX.push_back(pt.x);
+    for (const auto& pt : lidarPointsCurr) currX.push_back(pt.x);
+    
+    // Filter valid points (x > 0, within reasonable bounds)
+    auto filterValid = [](const std::vector<double>& vals)
+    {
+        std::vector<double> result;
+        for (double x : vals) {
+            if (x > 0.0 && x < 100.0) { // Very wide bounds, let percentile do the work
+                result.push_back(x);
+            }
+        }
+        return result;
+    };
+    
+    prevX = filterValid(prevX);
+    currX = filterValid(currX);
+    
+    if (prevX.empty() || currX.empty())
+    {
+        TTC = std::numeric_limits<double>::quiet_NaN();
+        return;
+    }
+    
+    // Get distance estimate based on method
+    auto getDistance = [&](const std::vector<double>& vals) -> double
+    {
+        switch (method)
+        {
+            case TTCMethod::UNFILTERED:
+            {
+                double sum = std::accumulate(vals.begin(), vals.end(), 0.0);
+                return sum / vals.size();
+            }
+            
+            case TTCMethod::PERCENTILE_MEAN:
+            {
+                std::vector<double> filtered = filterPercentiles(vals, 0.10, 0.90);
+                if (filtered.empty()) return 0.0;
+                double sum = std::accumulate(filtered.begin(), filtered.end(), 0.0);
+                return sum / filtered.size();
+            }
+            
+            case TTCMethod::PERCENTILE_MEDIAN:
+            {
+                std::vector<double> filtered = filterPercentiles(vals, 0.10, 0.90);
+                if (filtered.empty()) return 0.0;
+                size_t mid = filtered.size() / 2;
+                if (filtered.size() % 2 == 0) {
+                    return (filtered[mid - 1] + filtered[mid]) / 2.0;
+                }
+                return filtered[mid];
+            }
+            
+            default:
+            {
+                // Default to PERCENTILE_MEDIAN
+                std::vector<double> filtered = filterPercentiles(vals, 0.10, 0.90);
+                if (filtered.empty()) return 0.0;
+                size_t mid = filtered.size() / 2;
+                if (filtered.size() % 2 == 0)
+                {
+                    return (filtered[mid - 1] + filtered[mid]) / 2.0;
+                }
+                return filtered[mid];
+            }
+        }
+    };
+    
+    double d0 = getDistance(prevX);
+    double d1 = getDistance(currX);
+    
+    // Calculate relative speed and TTC
+    double v_rel = (d0 - d1) * frameRate;
+    
+    if ((v_rel > 0.0) && (d1 > 0.0))
+    {
+        TTC = d1 / v_rel;
+    }
+    else
+    {
+        TTC = std::numeric_limits<double>::quiet_NaN();
+    }
+}
+
+
+// Overload for backward compatibility (default method)
+void computeTTCLidar(
+    std::vector<LidarPoint> &lidarPointsPrev,
+    std::vector<LidarPoint> &lidarPointsCurr, 
+    double frameRate,
+    double &TTC)
+{
+    computeTTCLidar(lidarPointsPrev, lidarPointsCurr, frameRate, TTC, TTCMethod::PERCENTILE_MEDIAN);
 }
 
 

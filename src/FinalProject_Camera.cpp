@@ -75,7 +75,20 @@ int main(int argc, const char *argv[])
     std::string currentDetectorType = "SHITOMASI";
     std::string currentDescriptorType = "ORB";
 
+    // FP.2: TTC method selection
+    TTCMethod ttcLidarMethod = TTCMethod::PERCENTILE_MEDIAN; // Default method
+    bool bTestAllTTCMethods = false; // Enable comparison mode
     
+    // For storing TTC results from different methods
+    struct TTCResult
+    {
+        int frameIndex;
+        int prevBoxId;
+        int currBoxId;
+        std::map<std::string, double> ttcValues; // method name -> TTC value
+    };
+    std::vector<TTCResult> ttcResults;
+
     // Load class names from coco.yaml
     std::string yolo_base_path = dataPath + "dat/yolo/";
     std::string coco_yaml_path = yolo_base_path + "coco.yaml";
@@ -431,7 +444,38 @@ int main(int argc, const char *argv[])
                     //// STUDENT ASSIGNMENT
                     //// TASK FP.2 -> compute time-to-collision based on Lidar data (implement -> computeTTCLidar)
                     double ttcLidar; 
-                    computeTTCLidar(prevBB->lidarPoints, currBB->lidarPoints, sensorFrameRate, ttcLidar);
+                    
+                    if (bTestAllTTCMethods)
+                    {
+                        // Test all methods and record results
+                        TTCResult result;
+                        result.frameIndex = imgStartIndex + imgIndex;
+                        result.prevBoxId = it1->first;
+                        result.currBoxId = it1->second;
+                        
+                        // Define methods to test
+                        std::map<std::string, TTCMethod> methodNames = {
+                            {"unfiltered", TTCMethod::UNFILTERED},
+                            {"percentile_mean", TTCMethod::PERCENTILE_MEAN},
+                            {"percentile_median", TTCMethod::PERCENTILE_MEDIAN}
+                        };
+                        
+                        for (const auto& kv : methodNames)
+                        {
+                            double ttc;
+                            computeTTCLidar(prevBB->lidarPoints, currBB->lidarPoints, sensorFrameRate, ttc, kv.second);
+                            result.ttcValues[kv.first] = ttc;
+                        }
+                        
+                        ttcResults.push_back(result);
+                        ttcLidar = result.ttcValues["percentile_median"]; // Use median for display
+                        
+                    }
+                    else
+                    {
+                        // Use selected method
+                        computeTTCLidar(prevBB->lidarPoints, currBB->lidarPoints, sensorFrameRate, ttcLidar, ttcLidarMethod);
+                    }
                     //// EOF STUDENT ASSIGNMENT
 
                     //// STUDENT ASSIGNMENT
@@ -533,6 +577,63 @@ int main(int argc, const char *argv[])
         else
         {
             std::cerr << "Error: Could not open " << bbCsvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Save FP.2 TTC comparison results to CSV for Python analysis
+    if (bTestAllTTCMethods && !ttcResults.empty())
+    {
+        std::string csvFilename = "ttc_lidar_comparison.csv";
+        std::ofstream csvFile(csvFilename);
+        
+        if (csvFile.is_open())
+        {
+            // Write header
+            csvFile << "frame_index,prev_box_id,curr_box_id,";
+            std::vector<std::string> methodNames =
+            {
+                "unfiltered", "percentile_mean", "percentile_median"
+            };
+            for (const auto& name : methodNames)
+            {
+                csvFile << name << ",";
+            }
+            csvFile << "\n";
+            
+            // Write data
+            for (const auto& result : ttcResults)
+            {
+                csvFile << result.frameIndex << ","
+                        << result.prevBoxId << ","
+                        << result.currBoxId << ",";
+                
+                for (const auto& name : methodNames)
+                {
+                    if (result.ttcValues.count(name))
+                    {
+                        double val = result.ttcValues.at(name);
+                        if (std::isnan(val))
+                        {
+                            csvFile << "nan";
+                        }
+                        else
+                        {
+                            csvFile << val;
+                        }
+                    }
+                    csvFile << ",";
+                }
+                csvFile << "\n";
+            }
+            
+            csvFile.close();
+            std::cout << "\nFP.2 TTC comparison results saved to " << csvFilename << std::endl;
+            std::cout << "Total TTC records: " << ttcResults.size() << std::endl;
+            std::cout << "Use: python analysis/fp2_analysis.py --csv " << csvFilename << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
         }
     }
 
