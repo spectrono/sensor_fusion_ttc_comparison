@@ -159,19 +159,19 @@ uv pip install pandas seaborn matplotlib numpy
 
 ## Running the Analysis
 
-After running the C++ executable (which generates `bb_matches.csv`), run the analysis script:
+After running the C++ executable (which generates `analysis/output/bb_matches.csv`), run the analysis script:
 
 ```bash
-# From the project root
-python analysis/fp1_analysis.py --csv bb_matches.csv
+# From the project root (CSV files are automatically found in analysis/output/)
+cd analysis && source .venv/bin/activate && python fp1_analysis.py
 
-# Or from the analysis directory (with venv activated)
-python fp1_analysis.py --csv ../bb_matches.csv
+# Or from the project root with explicit path
+python analysis/fp1_analysis.py --csv analysis/output/bb_matches.csv
 ```
 
 The script will:
 - Generate a plot showing matches over frames for the preceding vehicle
-- Save the plot as `fp1_matches_SHITOMASI_ORB.png` in the analysis directory
+- Save the plot as `output/fp1_matches_SHITOMASI_ORB.png` in the analysis directory
 - Print summary statistics to the console
 
 Use `--help` to see all available options:
@@ -222,35 +222,44 @@ Setup this project report structure.
 
 Implement the method "matchBoundingBoxes," which receives both the previous and the current data frame as input and outputs the IDs of the assigned regions of interest (i.e., the "boxID" property). The matches must be those with the highest number of keypoint matches.
 
+Additionally, implement object tracking to maintain consistent identities across frames, assign unique trackIDs, and track the age of each track.
+
 ## **Submission requirements:**
 
 The code is functional and produces the specified output, with each bounding box assigned to the matches with the highest number of keypoint matches.
 
 ## **Implementation:**
 
-The implementation follows a two-step approach:
+The implementation follows a multi-step approach:
 
 1. **Count keypoint matches between bounding boxes**: For each keypoint match, it's determined which bounding box in the previous frame contains the previous keypoint and which bounding box in the current frame contains the current keypoint. The count of matches for each (prevBoxID, currBoxID) pair is maintained.
 
 2. **Find best matches**: For each bounding box in the previous frame, the bounding box in the current frame with the highest number of keypoint matches is selected.
 
+3. **Assign track IDs and ages**: The `assignTrackIDsAndFindPreceding()` function uses the keypoint match information to maintain object identity across frames. Each bounding box is assigned a `trackID` (persistent across frames) and `trackAge` (frames since first detection).
+
+4. **Track preceding vehicle**: The tracked preceding vehicle is highlighted in red in the 3D visualization, and its trackID and trackAge are displayed.
+
 The implementation uses modern C++ features:
 - `std::find_if` with lambda functions for finding bounding boxes containing keypoints
 - `std::max_element` for finding the current box with maximum matches
+- `std::map` for maintaining trackID and trackAge mappings across frames
 
-Currently, the standard detector/descriptor pair (SHITOMASI detector with ORB descriptor) is preselected for the main pipeline. However, the codebase is prepared for comprehensive testing of all detector-descriptor combinations through the `bTestAllCombinations` flag, later on. Results will be exported to `detector_descriptor_results.csv` for evaluation.
+Currently, the standard detector/descriptor pair (SHITOMASI detector with ORB descriptor) is preselected for the main pipeline. However, the codebase is prepared for comprehensive testing of all detector-descriptor combinations through the `bTestAllCombinations` flag. Results will be exported to `detector_descriptor_results.csv` for evaluation.
 
-The FP.1 matching results (frame index, previous box ID, current box ID, match count) are exported to `bb_matches.csv` for analysis using the Python script `analysis/fp1_analysis.py`.
+The bounding boxes in the 3D visualization now display track information and the tracked preceding vehicle is highlighted in red.
+
+The FP.1 matching results (frame index, previous box ID, current box ID, match count) are exported to `analysis/output/bb_matches.csv` for analysis using the Python script `analysis/fp1_analysis.py`.
 
 ## **Results:**
 
-Using the standard SHITOMASI detector with ORB descriptor combination on the KITTI sequence, the bounding box matching produces consistent tracking of the preceding vehicle on the ego lane. The number of keypoint matches between consecutive frames typically ranges from 20 to 80 matches for the preceding vehicle (boxID 0), demonstrating robust feature tracking.
+Using the standard SHITOMASI detector with ORB descriptor combination on the KITTI sequence, the bounding box matching produces consistent tracking of the preceding vehicle on the ego lane. With vehicle tracking enabled, we now track the same physical vehicle across all 18 frames regardless of YOLO's boxID assignments. The number of keypoint matches between consecutive frames ranges from 90 to 251 matches for the tracked preceding vehicle (boxID 0), with a mean of 189 matches per frame, demonstrating robust feature tracking.
 
-The following plot shows the number of matches over frames for the preceding vehicle:
+The following plot shows the number of matches over frames for the tracked preceding vehicle:
 
-![FP.1 Matches Plot](analysis/fp1_matches_SHITOMASI_ORB.png)
+![FP.1 Matches Plot](analysis/output/fp1_matches_SHITOMASI_ORB.png)
 
-*Figure: Number of keypoint matches over frames for the preceding vehicle using SHITOMASI detector and ORB descriptor*
+*Figure: Number of keypoint matches over frames for the tracked preceding vehicle using SHITOMASI detector and ORB descriptor. The plot shows consistent tracking across all 18 frames with match counts ranging from 90 to 251.*
 
 ## **Analysis:**
 
@@ -258,9 +267,9 @@ The SHITOMASI detector with ORB descriptor combination demonstrates effective pe
 
 - **Stability**: The number of matches remains relatively stable across frames, with minor fluctuations. This indicates that the detector-descriptor pair is consistently finding and matching the same features on the preceding vehicle.
 
-- **Match quality**: The match counts in the range of 20-80 for the preceding vehicle provide sufficient data for reliable bounding box association. Higher match counts could improve robustness.
+- **Match quality**: The match counts in the range of 90-251 for the tracked vehicle provide excellent data for reliable bounding box association. The high match counts demonstrate robust feature tracking.
 
-- **Track continuity**: The consistent matching enables continuous tracking of the preceding vehicle across the sequence, which is essential for subsequent TTC calculation tasks.
+- **Track continuity**: The consistent matching enables continuous tracking of the preceding vehicle across all 18 frames of the sequence, which is essential for subsequent TTC calculation tasks.
 
 - **Computational efficiency**: Both SHITOMASI and ORB are computationally efficient, making them suitable for real-time applications.
 
@@ -283,47 +292,56 @@ The code is functional and produces the specified output. Additionally, the code
 
 - Implemented `computeTTCLidar()` in `src/camFusion_Student.cpp` with enum-based method selection (`TTCMethod`)
 - Added percentile filtering helper function `filterPercentiles()` for removing extreme values (first and last 10%)
+- Increased bounding box `shrinkFactor` from 10% to 20% in `FinalProject_Camera.cpp` to reduce overlaps and improve Lidar point assignment
+- Implemented vehicle tracking with `findPrecedingVehicleBox()` and `trackPrecedingVehicle()` functions in `src/camFusion_Student.cpp` to maintain consistent object identity across frames using keypoint matches
 - Integrated configurable method selection in `src/FinalProject_Camera.cpp` with:
   - `TTCMethod ttcLidarMethod` for default method selection
   - `bTestAllTTCMethods` flag to enable comparison mode
-- Added comparison mode that tests all 3 methods and records results to `ttc_lidar_comparison.csv`
+- Added comparison mode that tests all 3 methods and records results to `analysis/output/ttc_lidar_comparison.csv`
 - Created Python analysis script `analysis/fp2_analysis.py` for visual and statistical comparison of methods
 - Default method: `PERCENTILE_MEDIAN` for best robustness
 
 ## **Results:**
 
-- All three methods produce valid TTC values for the preceding vehicle (boxID 0)
-- `PERCENTILE_MEDIAN` method selected as default
+- All three methods produce valid TTC values for the tracked preceding vehicle across all 18 frames
 - Comparison mode generates CSV with all method outputs for analysis
-- Analysis script produces visualization comparing the methods
-- Stability analysis shows `PERCENTILE_MEDIAN` has lowest frame-to-frame variability
+- Analysis script produces visualization and smoothness metrics comparing the methods
+- With 20% shrink factor, **UNFILTERED** shows the best smoothness with the lowest mean frame-to-frame change (1.60s) and fewest large jumps (13.3%)
 
-**Quantitative Results** (from test run on frames 1-18, full KITTI sequence):
+**Quantitative Results** (from test run on all 18 frames with vehicle tracking and 20% shrink factor):
 
-| Method | Mean TTC | Std Dev | Large Jumps (>2s) | Stability Rank |
-|--------|----------|---------|-------------------|----------------|
-| UNFILTERED | 11.75s | 2.28s | 20.0% | 2nd |
-| PERCENTILE_MEAN | 11.79s | 2.34s | 26.7% | 3rd |
-| **PERCENTILE_MEDIAN** | **11.73s** | **2.39s** | **13.3%** | **1st** |
+| Method | Mean TTC | Std Dev | Large Jumps (>2s) | Valid Samples |
+|--------|----------|---------|-------------------|---------------|
+| UNFILTERED | 11.78s | 2.55s | 13.3% (2/15) | 18/18 (100%) |
+| PERCENTILE_MEAN | 11.81s | 2.73s | 20.0% (3/15) | 18/18 (100%) |
+| **PERCENTILE_MEDIAN** | **11.76s** | **2.78s** | **26.7% (4/15)** | **18/18 (100%)** |
 
-The percentile_median method achieves the **lowest rate of large jumps (13.3%)**, demonstrating better stability across the full dataset. All methods show similar mean TTC values (~11.75-11.79s), but the median-based approach provides the most consistent frame-to-frame estimates.
+All methods produce valid TTC values for all 18 frames with the tracked preceding vehicle. The methods show similar mean TTC values (~11.76-11.81s), with UNFILTERED showing the fewest large jumps (13.3%).
 
 The comparison plot below shows the TTC values for each method:
 
-![FP.2 TTC Comparison Plot](analysis/fp2_ttc_comparison.png)
+![FP.2 TTC Comparison Plot](analysis/output/fp2_ttc_comparison.png)
 
-*Figure: TTC comparison for different outlier handling methods. The percentile_median method (green) shows the most stable results.*
+*Figure: TTC comparison for different outlier handling methods across all 18 frames with the tracked preceding vehicle and 20% shrink factor. The plot shows frame-to-frame TTC values; UNFILTERED (red) demonstrates the smoothest curve with fewest large jumps (13.3%).*
 
-The raw comparison data is available in [ttc_lidar_comparison.csv](ttc_lidar_comparison.csv) for further analysis.
+The raw comparison data is available in [analysis/output/ttc_lidar_comparison.csv](analysis/output/ttc_lidar_comparison.csv) for further analysis.
 
 ## **Analysis:**
 
-The comparative analysis across all methods reveals:
-- **UNFILTERED method** shows highest variability due to sensitivity to outlier Lidar points from other vehicles or spurious reflections
-- **PERCENTILE_MEAN** reduces variability significantly compared to unfiltered by removing extreme 10% from both tails of the sorted X-coordinate distribution, then computing the mean of remaining points
-- **PERCENTILE_MEDIAN** provides most stable results with lowest standard deviation and best outlier resistance, making it the better choice
-- The percentile-based approach (removing first/last 10%) effectively removes extreme outlier points while preserving the majority of valid data
-- Median estimation on filtered data provides best robustness for real-world scenarios with varying numbers of Lidar points per bounding box
+The comparative analysis across all methods with the full 18-frame dataset, proper vehicle tracking, and 20% shrink factor focuses on **TTC curve smoothness** (frame-to-frame consistency) rather than absolute TTC values, since the preceding vehicle is not stationary and mean/std dev of TTC values are less meaningful:
+
+**Smoothness Metrics (Frame-to-Frame Changes):**
+- **UNFILTERED**: Mean change 1.60s, Median 1.30s, Std Dev 1.23s, **Large jumps 13.3% (2/15)**
+- **PERCENTILE_MEAN**: Mean change 1.87s, Median 1.61s, Std Dev 1.46s, Large jumps 20.0% (3/15)
+- **PERCENTILE_MEDIAN**: Mean change 2.26s, Median 1.60s, Std Dev 1.61s, Large jumps 26.7% (4/15)
+
+**Key Observations:**
+- **UNFILTERED method** shows the **best smoothness** with the lowest mean frame-to-frame change (1.60s) and fewest large jumps (13.3%), suggesting that for this KITTI sequence, the raw Lidar data without filtering is sufficiently clean
+- **PERCENTILE_MEAN** performs reasonably with slightly higher frame-to-frame changes but still acceptable smoothness
+- **PERCENTILE_MEDIAN** shows the highest frame-to-frame variability, indicating it may be more sensitive to the specific distribution of Lidar points in this scene
+- All three methods produce valid TTC values for 100% of frames (18/18), demonstrating robustness
+- The percentile-based approach (removing first/last 10%) effectively removes extreme outlier points, but in this case UNFILTERED performs best for smoothness
+- **Note**: Large jumps can occur due to vehicle dynamics (preceding vehicle braking, ego vehicle accelerating) and are not necessarily errors in the estimation
 
 To run the comparison analysis:
 ```bash
@@ -331,17 +349,20 @@ To run the comparison analysis:
 bTestAllTTCMethods = true
 
 # Build and run the program
-cd build && make && ./FinalProject_Camera
+cd build && make && ./3D_object_tracking
 
-# Run the analysis script
-python analysis/fp2_analysis.py --csv ttc_lidar_comparison.csv
+# Run the analysis script (from project root)
+cd analysis && source .venv/bin/activate && python fp2_analysis.py
+
+# Or from any directory with the CSV in analysis/output/
+python analysis/fp2_analysis.py --csv analysis/output/ttc_lidar_comparison.csv
 ```
 
 # FP.3 Assign keypoint matches to bounding boxes
 
 ## **Methodology:**
 
-Prepare the TTC calculation based on camera measurements by assigning keypoint matches to the bounding frames that contain them. All matches that meet this condition must be added to a vector of the respective bounding frame.
+Prepare the TTC calculation based on camera measurements by assigning keypoint matches to the bounding frames that contain them. All matches that meet this condition must be added to a vector of the respective bounding frame. Additionally, handle overlapping bounding boxes by ensuring each keypoint match is assigned to at most one box, and remove outliers based on Euclidean distance.
 
 ## **Submission requirements**:
 
@@ -349,9 +370,61 @@ The code works as described and adds the keypoint matches to the "kptMatches" pr
 
 ## **Implementation:**
 
+- Implemented `clusterAllKptMatchesWithROI()` in `src/camFusion_Student.cpp` to handle all bounding boxes at once
+- Each keypoint match is assigned to exactly one bounding box (the one with smallest ROI area) to handle overlapping boxes
+- Added `filterMatchesByDistance()` helper function for percentile-based outlier removal on displacement distances
+- Integrated `clusterAllKptMatchesWithROI()` into main pipeline in `FinalProject_Camera.cpp` (replaces per-box calls)
+- Returns statistics tuple (boxID, matchesBefore, matchesAfter) for analysis
+- Added data collection mode (`bRecordKptStats = true`) to generate CSV for analysis
+- CSV output: `analysis/output/kpt_matches_filtering.csv` with per-frame, per-box statistics
+- Works in conjunction with vehicle tracking to ensure consistent statistics for the tracked preceding vehicle
+
 ## **Results:**
 
+- Successfully processed all 18 frames with overlapping bounding box handling
+- Total matches before filtering: 1652
+- Total matches after filtering: 1479
+- **Total matches removed: 173 (10.5%)**
+- Average removal rate per frame: 10.5%
+- Mean matches before filtering: 91.8 per box
+- Mean matches after filtering: 82.2 per box
+- Typical displacement distance: 6.20 pixels (mean), 1.00 pixels (median)
+- Per-box statistics recorded for preceding vehicle (boxID 1) across 15 frames, plus other vehicles
+
+The comparison plot below shows the keypoint match filtering results:
+
+![FP.3 Keypoint Match Filtering Plot](analysis/output/fp3_kpt_comparison.png)
+
+*Figure: Keypoint match counts before vs after filtering (red=before, green=after), outlier removal percentage, and displacement distance statistics over frames 1-18. The tracked preceding vehicle shows consistent filtering with ~10% outlier removal across the full sequence.*
+
+The raw comparison data is available in [analysis/output/kpt_matches_filtering.csv](analysis/output/kpt_matches_filtering.csv) for further analysis.
+
 ## **Analysis:**
+
+The new implementation addresses the critical issue of overlapping bounding boxes:
+
+- **Overlap resolution**: Each keypoint match is assigned to exactly one bounding box using a "smallest area wins" strategy, ensuring no double-counting in subsequent TTC calculations
+- **Removal rate**: 10.5% of matches removed as outliers (173/1652), consistent with the 10% percentile filtering threshold (5% from each tail)
+- **Small displacement outliers**: Removes matches with very small distances (likely static features or detection noise on the vehicle)
+- **Large displacement outliers**: Removes matches with very large distances (likely false matches from different objects or occlusions)
+- **Robust matching**: Remaining 89.5% of matches (1479/1652) provide a stable foundation for subsequent camera-based TTC calculation (FP.4)
+- **Consistent approach**: Uses the same percentile filtering methodology as FP.2 (Lidar TTC), ensuring uniform statistical robustness across the project
+- **Full sequence coverage**: With vehicle tracking enabled, statistics are collected for the tracked preceding vehicle across all 18 frames
+
+To run the FP.3 analysis:
+```bash
+# Enable statistics recording in FinalProject_Camera.cpp
+bRecordKptStats = true
+
+# Build and run the program
+cd build && make && ./3D_object_tracking
+
+# Run the analysis script (from project root)
+cd analysis && source .venv/bin/activate && python fp3_analysis.py
+
+# Or from any directory with the CSV in analysis/output/
+python analysis/fp3_analysis.py --csv analysis/output/kpt_matches_filtering.csv
+```
 
 # FP.4 Calculate TTC based on camera data
 

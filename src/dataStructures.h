@@ -14,6 +14,7 @@ struct BoundingBox { // bounding box around a classified object (contains both 2
     
     int boxID; // unique identifier for this bounding box
     int trackID; // unique identifier for the track to which this bounding box belongs
+    int trackAge; // age of the track in frames (0 = new track)
     
     cv::Rect roi; // 2D region-of-interest in image coordinates
     int classID; // ID based on class file provided to YOLO framework

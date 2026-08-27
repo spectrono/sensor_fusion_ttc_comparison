@@ -121,7 +121,8 @@ void detectObjects(
     const float confidence_threshold,
     const float nms_threshold,
     const std::vector<std::string>& class_names,
-    const bool bVis)
+    const bool bVis,
+    const int trackedPrecedingVehicleTrackID)
 {
     // Transform input to be compatible with onnx model used
     LetterboxResult letterbox_result = letterbox(img, onnx_input_width, onnx_input_height);
@@ -220,35 +221,89 @@ void detectObjects(
         bBoxes.push_back(bbox);
     }
 
-    if (bVis)
-    {
-        cv::Mat visImg = img.clone();
+    //     if (bVis)
+    //     {
+    //         cv::Mat visImg = img.clone();
 
-        for (size_t i = 0; i < bBoxes.size(); ++i)
-        {
-            const BoundingBox& bbox = bBoxes[i];
-            const cv::Rect box = bbox.roi;
-            const int class_id = bbox.classID;
-            const float confidence = static_cast<float>(bbox.confidence);
+    //         for (size_t i = 0; i < bBoxes.size(); ++i)
+    //         {
+    //             const BoundingBox& bbox = bBoxes[i];
+    //             const cv::Rect box = bbox.roi;
+    //             const int class_id = bbox.classID;
+    //             const float confidence = static_cast<float>(bbox.confidence);
 
-            cv::rectangle(visImg, box, cv::Scalar(0, 255, 0), 2); // Green bounding box
+    //             // Draw bounding box with color based on tracking: red for preceding vehicle, blue for others
+    //             cv::Scalar boxColor = cv::Scalar(255, 0, 0); // Blue (BGR format)
+    //             if (trackedPrecedingVehicleTrackID != -1 && bbox.trackID == trackedPrecedingVehicleTrackID)
+    //             {
+    //                 boxColor = cv::Scalar(0, 0, 255); // Red for tracked preceding vehicle
+    //             }
+    //             cv::rectangle(visImg, box, boxColor, 2);
             
-            // Create label with class name and confidence
-            std::string class_name = (class_id >= 0 && class_id < class_names.size()) ? class_names[class_id] : "unknown";
-            std::string label = class_name + ":  " + std::to_string(confidence).substr(0, 4);
+    //             // Create label with class name, confidence, box_id, and track_id
+    //             std::string class_name = (class_id >= 0 && class_id < class_names.size()) ? class_names[class_id] : "unknown";
+    //             std::string label = class_name + ": " + std::to_string(confidence).substr(0, 4) + 
+    //                               ", box_id=" + std::to_string(bbox.boxID) +
+    //                               ", track_id=" + std::to_string(bbox.trackID);
         
-            // Display label at the top of the bounding box
-            int base_line;
-            const cv::Size label_size = getTextSize(label, cv::FONT_ITALIC, 0.5, 1, &base_line);
-            const int      top  = std::max(box.y, label_size.height);
-            const int      left = box.x;
-            cv::putText(visImg, label, cv::Point(left, top), cv::FONT_ITALIC, 0.75, cv::Scalar(0, 200, 200), 1);
-        }
+    //             // Display label at the top of the bounding box
+    //             int base_line;
+    //             const cv::Size label_size = getTextSize(label, cv::FONT_ITALIC, 0.5, 1, &base_line);
+    //             const int      top  = std::max(box.y, label_size.height);
+    //             const int      left = box.x;
+    //             cv::putText(visImg, label, cv::Point(left, top), cv::FONT_ITALIC, 0.75, cv::Scalar(0, 200, 200), 1);
+    //         }
 
-        // Show results
-        std::string window_name = "Object classification";
-        cv::namedWindow(window_name, 10);
-        cv::imshow(window_name, visImg);
-        cv::waitKey(1);
+    //         // Show results
+    //         std::string window_name = "Object classification";
+    //         cv::namedWindow(window_name, 10);
+    //         cv::imshow(window_name, visImg);
+    //         cv::waitKey(1);
+    //     }
+}
+
+// Helper function to visualize bounding boxes with tracking colors
+// Called from FinalProject_Camera.cpp after trackIDs are assigned
+void visualizeBoundingBoxes(
+    cv::Mat& img,
+    std::vector<BoundingBox>& bBoxes,
+    const std::vector<std::string>& class_names,
+    const int trackedPrecedingVehicleTrackID)
+{
+    cv::Mat visImg = img.clone();
+
+    for (size_t i = 0; i < bBoxes.size(); ++i)
+    {
+        const BoundingBox& bbox = bBoxes[i];
+        const cv::Rect box = bbox.roi;
+        const int class_id = bbox.classID;
+        const float confidence = static_cast<float>(bbox.confidence);
+
+        // Draw bounding box with color based on tracking: red for preceding vehicle, blue for others
+        cv::Scalar boxColor = cv::Scalar(255, 0, 0); // Blue (BGR format)
+        if (trackedPrecedingVehicleTrackID != -1 && bbox.trackID == trackedPrecedingVehicleTrackID)
+        {
+            boxColor = cv::Scalar(0, 0, 255); // Red for tracked preceding vehicle
+        }
+        cv::rectangle(visImg, box, boxColor, 2);
+        
+        // Create label with class name, confidence, box_id, and track_id
+        std::string class_name = (class_id >= 0 && class_id < class_names.size()) ? class_names[class_id] : "unknown";
+        std::string label = class_name + ": " + std::to_string(confidence).substr(0, 4) + 
+                          ", box_id=" + std::to_string(bbox.boxID) +
+                          ", track_id=" + std::to_string(bbox.trackID);
+        
+        // Display label at the top of the bounding box
+        int base_line;
+        const cv::Size label_size = getTextSize(label, cv::FONT_ITALIC, 0.5, 1, &base_line);
+        const int      top  = std::max(box.y, label_size.height);
+        const int      left = box.x;
+        cv::putText(visImg, label, cv::Point(left, top), cv::FONT_ITALIC, 0.75, cv::Scalar(0, 200, 200), 1);
     }
+
+    // Show results
+    std::string window_name = "Object classification";
+    cv::namedWindow(window_name, 10);
+    cv::imshow(window_name, visImg);
+    cv::waitKey(1);
 }

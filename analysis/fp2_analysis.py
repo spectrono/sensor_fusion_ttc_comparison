@@ -201,10 +201,10 @@ def main():
     parser = argparse.ArgumentParser(
         description='FP.2 Lidar TTC Analysis - Compare different filtering methods'
     )
-    parser.add_argument('--csv', type=str, required=True, 
-                       help='Path to TTC comparison CSV file (e.g., ttc_lidar_comparison.csv)')
+    parser.add_argument('--csv', type=str, default='output/ttc_lidar_comparison.csv',
+                       help='Path to TTC comparison CSV file (default: output/ttc_lidar_comparison.csv)')
     parser.add_argument('--output', type=str, default='fp2_ttc',
-                       help='Output prefix for plots (default: fp2_ttc)')
+                       help='Output prefix for plots (default: fp2_ttc, saves to output/fp2_ttc_comparison.png)')
     parser.add_argument('--show', action='store_true',
                        help='Show plots interactively')
     args = parser.parse_args()

@@ -66,16 +66,25 @@ void clusterLidarWithROI(std::vector<BoundingBox> &boundingBoxes, std::vector<Li
 * However, you can make this function work for other sizes too.
 * For instance, to use a 1000x1000 size, adjusting the text positions by dividing them by 2.
 */
-void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait)
+void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait, int trackedPrecedingVehicleTrackID)
 {
     // create topview image
     cv::Mat topviewImg(imageSize, CV_8UC3, cv::Scalar(255, 255, 255));
 
     for(auto it1=boundingBoxes.begin(); it1!=boundingBoxes.end(); ++it1)
     {
-        // create randomized color for current 3D object
-        cv::RNG rng(it1->boxID);
-        cv::Scalar currColor = cv::Scalar(rng.uniform(0,150), rng.uniform(0, 150), rng.uniform(0, 150));
+        // Determine color based on trackID: red for tracked preceding vehicle, blue for others
+        cv::Scalar currColor;
+        if (trackedPrecedingVehicleTrackID != -1 && it1->trackID == trackedPrecedingVehicleTrackID)
+        {
+            // Tracked preceding vehicle: RED
+            currColor = cv::Scalar(0, 0, 255); // BGR format: red
+        }
+        else
+        {
+            // Other vehicles: BLUE
+            currColor = cv::Scalar(255, 0, 0); // BGR format: blue
+        }
 
         // plot Lidar points into top view image
         int top=1e8, left=1e8, bottom=0.0, right=0.0; 
@@ -104,10 +113,11 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
         }
 
         // draw enclosing rectangle
-        cv::rectangle(topviewImg, cv::Point(left, top), cv::Point(right, bottom),cv::Scalar(0,0,0), 2);
+        cv::rectangle(topviewImg, cv::Point(left, top), cv::Point(right, bottom), cv::Scalar(0,0,0), 2);
 
-        // augment object with some key data
-        std::string str1 = cv::format("id=%d, #pts=%d", it1->boxID, (int)it1->lidarPoints.size());
+        // augment object with some key data including track info
+        std::string str1 = cv::format("box_id=%d, track_id=%d, age=%d, #pts=%d", 
+                                      it1->boxID, it1->trackID, it1->trackAge, (int)it1->lidarPoints.size());
         putText(topviewImg, str1, cv::Point2f(left-250, bottom+50), cv::FONT_ITALIC, 2, currColor);
         std::string str2 = cv::format("xmin=%.2f m, yw=%.2f m", xwmin, ywmax-ywmin);
         putText(topviewImg, str2, cv::Point2f(left-250, bottom+125), cv::FONT_ITALIC, 2, currColor);  
@@ -134,24 +144,183 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
 }
 
 
-// associate a given bounding box with the keypoints it contains
+// Helper: Filter matches by Euclidean distance percentile
+std::vector<cv::DMatch> filterMatchesByDistance(
+    const std::vector<cv::DMatch> &matches,
+    const std::vector<cv::KeyPoint> &kptsPrev,
+    const std::vector<cv::KeyPoint> &kptsCurr)
+{
+    if (matches.size() <= 2) return matches;
+    
+    // Calculate displacement distances
+    std::vector<double> distances;
+    for (const auto &match : matches)
+    {
+        const cv::KeyPoint &prevKp = kptsPrev[match.queryIdx];
+        const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+        double dist = cv::norm(prevKp.pt - currKp.pt);
+        distances.push_back(dist);
+    }
+    
+    // Sort and filter by percentile (remove first and last 10%)
+    std::sort(distances.begin(), distances.end());
+    size_t lowerIdx = distances.size() / 10;
+    size_t upperIdx = distances.size() * 9 / 10;
+    
+    if (lowerIdx < distances.size() && upperIdx < distances.size())
+    {
+        double lowerThreshold = distances[lowerIdx];
+        double upperThreshold = distances[upperIdx];
+        
+        std::vector<cv::DMatch> filtered;
+        for (size_t i = 0; i < matches.size(); ++i)
+        {
+            const cv::KeyPoint &prevKp = kptsPrev[matches[i].queryIdx];
+            const cv::KeyPoint &currKp = kptsCurr[matches[i].trainIdx];
+            double dist = cv::norm(prevKp.pt - currKp.pt);
+            
+            if (dist >= lowerThreshold && dist <= upperThreshold)
+            {
+                filtered.push_back(matches[i]);
+            }
+        }
+        return filtered;
+    }
+    
+    return matches;
+}
+
+// Associate keypoint matches with a single bounding box, handling overlaps
+// Each keypoint match is assigned to at most one bounding box (the first one that contains it)
 void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPoint> &kptsCurr, std::vector<cv::DMatch> &kptMatches)
 {
     // Clear the keypoint matches for this bounding box
     boundingBox.kptMatches.clear();
 
-    // For each keypoint match, check if current keypoint is within this bounding box's ROI
+    // Collect matches within bounding box
+    std::vector<cv::DMatch> matchesInBox;
     for (const auto &match : kptMatches)
     {
         const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
-
+        
         // Check if current keypoint is within the bounding box ROI
         if (boundingBox.roi.contains(currKp.pt))
         {
-            // Add the match to the bounding box's kptMatches
-            boundingBox.kptMatches.push_back(match);
+            matchesInBox.push_back(match);
         }
     }
+    
+    // Apply percentile-based outlier removal
+    boundingBox.kptMatches = filterMatchesByDistance(matchesInBox, kptsPrev, kptsCurr);
+}
+
+
+// Cluster keypoint matches to all bounding boxes, ensuring each match is assigned to at most one box
+// This handles overlapping bounding boxes by assigning each match to the box with the smallest area
+// that contains the current keypoint (most specific box wins)
+// Returns a vector of statistics for each bounding box: (boxID, matchesBefore, matchesAfter)
+std::vector<std::tuple<int, int, int>> clusterAllKptMatchesWithROI(
+    std::vector<BoundingBox> &boundingBoxes,
+    std::vector<cv::KeyPoint> &kptsPrev,
+    std::vector<cv::KeyPoint> &kptsCurr,
+    std::vector<cv::DMatch> &kptMatches)
+{
+    // Clear all keypoint matches for all bounding boxes
+    for (auto &bb : boundingBoxes)
+    {
+        bb.kptMatches.clear();
+    }
+
+    // For each match, find all bounding boxes that contain the current keypoint
+    // and assign it to the box with the smallest area (most specific)
+    // Track how many matches are assigned to each box before filtering
+    std::map<int, int> boxMatchCountsBefore;
+    
+    for (const auto &match : kptMatches)
+    {
+        const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+        
+        BoundingBox* bestBB = nullptr;
+        int bestArea = std::numeric_limits<int>::max();
+        
+        // Find all bounding boxes containing this keypoint
+        for (auto &bb : boundingBoxes)
+        {
+            if (bb.roi.contains(currKp.pt))
+            {
+                int area = bb.roi.width * bb.roi.height;
+                if (area < bestArea)
+                {
+                    bestArea = area;
+                    bestBB = &bb;
+                }
+            }
+        }
+        
+        // If we found at least one bounding box, assign this match to the best one
+        if (bestBB != nullptr)
+        {
+            bestBB->kptMatches.push_back(match);
+            boxMatchCountsBefore[bestBB->boxID]++;
+        }
+    }
+    
+    // Apply percentile-based outlier removal for each bounding box
+    std::vector<std::tuple<int, int, int>> stats; // (boxID, before, after)
+    for (auto &bb : boundingBoxes)
+    {
+        int before = boxMatchCountsBefore[bb.boxID];
+        int after = static_cast<int>(bb.kptMatches.size());
+        
+        if (!bb.kptMatches.empty())
+        {
+            bb.kptMatches = filterMatchesByDistance(bb.kptMatches, kptsPrev, kptsCurr);
+        }
+        
+        after = static_cast<int>(bb.kptMatches.size());
+        stats.emplace_back(bb.boxID, before, after);
+    }
+    
+    return stats;
+}
+
+
+// Helper function to compute statistics for keypoint matches in a bounding box
+// Returns a tuple of (matchesBefore, matchesAfter, outliersRemovedPct, meanDistance, medianDistance, stddevDistance)
+std::tuple<int, int, double, double, double, double> 
+computeKptMatchStats(const std::vector<cv::DMatch> &matchesBefore,
+                     const std::vector<cv::DMatch> &matchesAfter,
+                     const std::vector<cv::KeyPoint> &kptsPrev,
+                     const std::vector<cv::KeyPoint> &kptsCurr)
+{
+    int before = static_cast<int>(matchesBefore.size());
+    int after = static_cast<int>(matchesAfter.size());
+    double outliersRemovedPct = (before > 0) ? (100.0 * (before - after) / before) : 0.0;
+    
+    double meanDist = 0.0, medianDist = 0.0, stddevDist = 0.0;
+    
+    if (after > 0)
+    {
+        std::vector<double> distances;
+        for (const auto &match : matchesAfter)
+        {
+            const cv::KeyPoint &prevKp = kptsPrev[match.queryIdx];
+            const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+            double dist = cv::norm(prevKp.pt - currKp.pt);
+            distances.push_back(dist);
+        }
+        
+        if (!distances.empty())
+        {
+            meanDist = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
+            std::sort(distances.begin(), distances.end());
+            medianDist = distances[distances.size() / 2];
+            double sq_sum = std::inner_product(distances.begin(), distances.end(), distances.begin(), 0.0);
+            stddevDist = std::sqrt(sq_sum / distances.size() - meanDist * meanDist);
+        }
+    }
+    
+    return std::make_tuple(before, after, outliersRemovedPct, meanDist, medianDist, stddevDist);
 }
 
 
@@ -309,6 +478,199 @@ inline int findBBIdByPoint(const std::vector<BoundingBox> &bounding_boxes, const
         [&pt](const BoundingBox &bb) { return bb.roi.contains(pt); });
 
     return (it != bounding_boxes.end()) ? it->boxID : -1;
+}
+
+
+// Helper function: Find the bounding box that represents the preceding vehicle
+// Criteria: has Lidar points and is most central on ego lane (closest to image center with closest Lidar points)
+// Returns the boxID of the preceding vehicle, or -1 if not found
+int findPrecedingVehicleBox(const std::vector<BoundingBox> &boundingBoxes, const cv::Mat &cameraImg)
+{
+    if (boundingBoxes.empty() || cameraImg.empty()) return -1;
+    
+    int imageCenterX = cameraImg.cols / 2;
+    int bestBoxID = -1;
+    double bestScore = -1.0;
+    
+    for (const auto &bb : boundingBoxes)
+    {
+        // Must have Lidar points to be considered
+        if (bb.lidarPoints.empty()) continue;
+        
+        // Calculate score based on:
+        // 1. Number of Lidar points (more = better)
+        // 2. Horizontal position (closer to center = better)
+        // 3. Mean X distance from Lidar points (closer to camera = better, but not too close)
+        int boxCenterX = bb.roi.x + bb.roi.width / 2;
+        int distanceFromCenter = std::abs(boxCenterX - imageCenterX);
+        
+        // Calculate mean X coordinate of Lidar points (forward distance)
+        // Prefer boxes with Lidar points at reasonable distance (not too close, not too far)
+        double meanX = 0.0;
+        double minX = 1e9;
+        for (const auto &lp : bb.lidarPoints)
+        {
+            meanX += lp.x;
+            minX = std::min(minX, lp.x);
+        }
+        meanX /= bb.lidarPoints.size();
+        
+        // Penalize boxes that are too close (minX < 5m) or too far (meanX > 30m)
+        // Ideal range: 5-20 meters in front of camera
+        double distancePenalty = 0.0;
+        if (minX < 5.0) {
+            // Too close - heavily penalize
+            distancePenalty = 1000.0;
+        } else if (meanX > 30.0) {
+            // Too far - penalize
+            distancePenalty = (meanX - 30.0) * 10.0;
+        }
+        
+        // Score: high Lidar count + low distance from center - distance penalty
+        // Normalize: Lidar count (0-100) + center distance (0-1000) + distance penalty
+        double score = static_cast<double>(bb.lidarPoints.size()) * 2.0 
+                     - static_cast<double>(distanceFromCenter) / 20.0
+                     - distancePenalty;
+        
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestBoxID = bb.boxID;
+        }
+    }
+    
+    return bestBoxID;
+}
+
+
+// Helper function: Assign track IDs and ages to bounding boxes
+// Uses keypoint matches to maintain object identity across frames
+// Also identifies and tracks the preceding vehicle
+// Returns the boxID of the tracked preceding vehicle
+int assignTrackIDsAndFindPreceding(
+    std::vector<BoundingBox> &currBoundingBoxes,
+    const std::map<int, int> &bbBestMatches,
+    const std::vector<BoundingBox> &prevBoundingBoxes,
+    const cv::Mat &cameraImg,
+    int &trackedPrecedingVehicleBoxID,
+    int &trackedPrecedingVehicleTrackID,
+    std::map<int, int> &trackIDMap,  // Maps current boxID to trackID
+    std::map<int, int> &trackAgeMap) // Maps trackID to age
+{
+    int currPrecedingVehicleBoxID = -1;
+    static int nextTrackID = 0; // Single static counter for all new tracks
+    
+    // For each current bounding box, determine its trackID and trackAge
+    for (auto &currBB : currBoundingBoxes)
+    {
+        // Try to find a match from previous frame
+        int prevBoxID = -1;
+        for (const auto &match : bbBestMatches)
+        {
+            if (match.second == currBB.boxID)
+            {
+                prevBoxID = match.first;
+                break;
+            }
+        }
+        
+        if (prevBoxID != -1)
+        {
+            // Find the previous box's trackID
+            int prevTrackID = -1;
+            for (const auto &prevBB : prevBoundingBoxes)
+            {
+                if (prevBB.boxID == prevBoxID)
+                {
+                    prevTrackID = prevBB.trackID;
+                    break;
+                }
+            }
+            
+            if (prevTrackID != -1)
+            {
+                // Continue the track
+                currBB.trackID = prevTrackID;
+                currBB.trackAge = trackAgeMap[prevTrackID] + 1;
+                trackAgeMap[prevTrackID] = currBB.trackAge;
+                trackIDMap[currBB.boxID] = prevTrackID;
+            }
+            else
+            {
+                // New track (previous box didn't have a trackID)
+                currBB.trackID = nextTrackID++;
+                currBB.trackAge = 0;
+                trackIDMap[currBB.boxID] = currBB.trackID;
+                trackAgeMap[currBB.trackID] = 0;
+            }
+        }
+        else
+        {
+            // New detection, assign new track
+            currBB.trackID = nextTrackID++;
+            currBB.trackAge = 0;
+            trackIDMap[currBB.boxID] = currBB.trackID;
+            trackAgeMap[currBB.trackID] = 0;
+        }
+    }
+    
+    // Now find and track the preceding vehicle
+    if (trackedPrecedingVehicleBoxID == -1)
+    {
+        // First time: find the preceding vehicle
+        trackedPrecedingVehicleBoxID = findPrecedingVehicleBox(currBoundingBoxes, cameraImg);
+        // Get its trackID
+        if (trackedPrecedingVehicleBoxID != -1)
+        {
+            for (const auto &bb : currBoundingBoxes)
+            {
+                if (bb.boxID == trackedPrecedingVehicleBoxID)
+                {
+                    trackedPrecedingVehicleTrackID = bb.trackID;
+                    break;
+                }
+            }
+        }
+    }
+    else
+    {
+        // Follow the match from previous tracked box
+        auto it = bbBestMatches.find(trackedPrecedingVehicleBoxID);
+        if (it != bbBestMatches.end())
+        {
+            currPrecedingVehicleBoxID = it->second;
+            // Update the tracked boxID
+            trackedPrecedingVehicleBoxID = currPrecedingVehicleBoxID;
+            // Get the trackID for the current box
+            for (const auto &bb : currBoundingBoxes)
+            {
+                if (bb.boxID == trackedPrecedingVehicleBoxID)
+                {
+                    trackedPrecedingVehicleTrackID = bb.trackID;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            // Lost track, find again
+            trackedPrecedingVehicleBoxID = findPrecedingVehicleBox(currBoundingBoxes, cameraImg);
+            // Get its trackID
+            if (trackedPrecedingVehicleBoxID != -1)
+            {
+                for (const auto &bb : currBoundingBoxes)
+                {
+                    if (bb.boxID == trackedPrecedingVehicleBoxID)
+                    {
+                        trackedPrecedingVehicleTrackID = bb.trackID;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    return trackedPrecedingVehicleBoxID;
 }
 
 

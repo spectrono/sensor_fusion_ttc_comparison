@@ -83,6 +83,7 @@ LetterboxResult letterbox(
  * @param nms_threshold NMS threshold for suppressing overlapping boxes
  * @param class_names Vector of class names for labeling (from coco.yaml)
  * @param bVis If true, displays results in a window
+ * @param trackedPrecedingVehicleTrackID Track ID of the preceding vehicle (for coloring), -1 if not set
  */
 void detectObjects(
     cv::Mat& img,
@@ -93,7 +94,15 @@ void detectObjects(
     const float confidence_threshold,
     const float nms_threshold,
     const std::vector<std::string>& class_names,
-    const bool bVis);
+    const bool bVis = true,
+    const int trackedPrecedingVehicleTrackID = -1);
+
+// Helper function to visualize bounding boxes with tracking colors
+void visualizeBoundingBoxes(
+    cv::Mat& img,
+    std::vector<BoundingBox>& bBoxes,
+    const std::vector<std::string>& class_names,
+    const int trackedPrecedingVehicleTrackID);
 
 
 #endif // objectDetection2D_hpp

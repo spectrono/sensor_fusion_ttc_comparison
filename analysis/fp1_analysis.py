@@ -16,7 +16,7 @@ import argparse
 import os
 
 
-def plot_matches_over_frames(csv_path, output_dir=".", detector="SHITOMASI", descriptor="ORB"):
+def plot_matches_over_frames(csv_path, output_dir=".", detector="SHITOMASI", descriptor="ORB", show=True):
     """
     Plot the number of matches over frames for the preceding vehicle.
     
@@ -25,6 +25,7 @@ def plot_matches_over_frames(csv_path, output_dir=".", detector="SHITOMASI", des
         output_dir: Directory to save the plot
         detector: Detector type (for plot title)
         descriptor: Descriptor type (for plot title)
+        show: Whether to display the plot interactively (default: True)
     """
     # Read the CSV file
     try:
@@ -91,8 +92,11 @@ def plot_matches_over_frames(csv_path, output_dir=".", detector="SHITOMASI", des
     print(f"Plot saved to: {output_path}")
     
     # Show the plot
-    plt.tight_layout()
-    plt.show()
+    if show:
+        plt.tight_layout()
+        plt.show()
+    else:
+        plt.close()
     
     # Return the data for potential further analysis
     return preceding_vehicle_matches
@@ -168,14 +172,14 @@ def main():
     parser.add_argument(
         "--csv",
         type=str,
-        default="bb_matches.csv",
-        help="Path to CSV file containing match data (default: bb_matches.csv)"
+        default="output/bb_matches.csv",
+        help="Path to CSV file containing match data (default: output/bb_matches.csv)"
     )
     parser.add_argument(
         "--output",
         type=str,
-        default=".",
-        help="Output directory for plots (default: current directory)"
+        default="output",
+        help="Output directory for plots (default: output)"
     )
     parser.add_argument(
         "--detector",
@@ -194,6 +198,11 @@ def main():
         action="store_true",
         help="Also plot matches for all bounding boxes"
     )
+    parser.add_argument(
+        "--no-show",
+        action="store_true",
+        help="Disable interactive plot display"
+    )
     
     args = parser.parse_args()
     
@@ -202,7 +211,8 @@ def main():
         args.csv, 
         args.output, 
         args.detector, 
-        args.descriptor
+        args.descriptor,
+        show=args.show if hasattr(args, 'show') else not args.no_show
     )
     
     if df is not None:

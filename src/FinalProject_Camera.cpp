@@ -77,7 +77,7 @@ int main(int argc, const char *argv[])
 
     // FP.2: TTC method selection
     TTCMethod ttcLidarMethod = TTCMethod::PERCENTILE_MEDIAN; // Default method
-    bool bTestAllTTCMethods = false; // Enable comparison mode
+    bool bTestAllTTCMethods = true; // Enable comparison mode for FP.2 analysis
     
     // For storing TTC results from different methods
     struct TTCResult
@@ -88,6 +88,21 @@ int main(int argc, const char *argv[])
         std::map<std::string, double> ttcValues; // method name -> TTC value
     };
     std::vector<TTCResult> ttcResults;
+
+    // For FP.3: Store keypoint match filtering statistics
+    struct KptMatchStats
+    {
+        int frameIndex;
+        int boxId;
+        int matchesBefore;
+        int matchesAfter;
+        double outliersRemovedPct;
+        double meanDistance;
+        double medianDistance;
+        double stddevDistance;
+    };
+    std::vector<KptMatchStats> kptMatchStats;
+    bool bRecordKptStats = true; // Enable to record FP.3 statistics
 
     // Load class names from coco.yaml
     std::string yolo_base_path = dataPath + "dat/yolo/";
@@ -143,6 +158,12 @@ int main(int argc, const char *argv[])
     int dataBufferSize = 2;       // no. of images which are held in memory (ring buffer) at the same time
     vector<DataFrame> dataBuffer; // list of data frames which are held in memory at the same time
     bool bVis = true;             // visualize results
+    
+    // For tracking objects across frames
+    int trackedPrecedingVehicleBoxID = -1; // -1 means not yet initialized
+    int trackedPrecedingVehicleTrackID = -1; // -1 means not yet initialized
+    std::map<int, int> trackIDMap; // Maps current boxID to trackID
+    std::map<int, int> trackAgeMap; // Maps trackID to age
 
     /* MAIN LOOP OVER ALL IMAGES */
 
@@ -188,7 +209,7 @@ int main(int argc, const char *argv[])
             confThreshold,
             nmsThreshold,
             class_names,
-            bVis);
+            false); // Disable internal visualization
 
         cout << "#2 : DETECT & CLASSIFY OBJECTS done" << endl;
 
@@ -206,19 +227,60 @@ int main(int argc, const char *argv[])
     
         (dataBuffer.end() - 1)->lidarPoints = lidarPoints;
 
+        // Initialize trackID and trackAge for first frame's bounding boxes
+        // Note: Use negative trackIDs for frame 0 so they don't conflict with the counter in assignTrackIDsAndFindPreceding
+        if (dataBuffer.size() == 1)
+        {
+            // Use negative trackIDs for frame 0 to avoid conflicts with the positive counter
+            // in assignTrackIDsAndFindPreceding (which starts at 0)
+            for (size_t i = 0; i < (dataBuffer.end() - 1)->boundingBoxes.size(); ++i)
+            {
+                auto &bb = (dataBuffer.end() - 1)->boundingBoxes[i];
+                bb.trackID = -(i + 1); // Negative trackIDs: -1, -2, -3, ...
+                bb.trackAge = 0;
+                // Also initialize the track maps for consistency
+                trackIDMap[bb.boxID] = bb.trackID;
+                trackAgeMap[bb.trackID] = bb.trackAge;
+            }
+            
+            // Find and track the preceding vehicle for frame 0
+            trackedPrecedingVehicleBoxID = findPrecedingVehicleBox((dataBuffer.end() - 1)->boundingBoxes, (dataBuffer.end() - 1)->cameraImg);
+            if (trackedPrecedingVehicleBoxID != -1)
+            {
+                for (const auto &bb : (dataBuffer.end() - 1)->boundingBoxes)
+                {
+                    if (bb.boxID == trackedPrecedingVehicleBoxID)
+                    {
+                        trackedPrecedingVehicleTrackID = bb.trackID;
+                        break;
+                    }
+                }
+            }
+            
+            // Visualize bounding boxes for frame 0 with tracking colors
+            if (bVis)
+            {
+                visualizeBoundingBoxes(
+                    (dataBuffer.end() - 1)->cameraImg,
+                    (dataBuffer.end() - 1)->boundingBoxes,
+                    class_names,
+                    trackedPrecedingVehicleTrackID);
+            }
+        }
+
         cout << "#3 : CROP LIDAR POINTS done" << endl;
 
 
         /* CLUSTER LIDAR POINT CLOUD */
 
         // associate Lidar points with camera-based ROI
-        float shrinkFactor = 0.10; // shrinks each bounding box by the given percentage to avoid 3D object merging at the edges of an ROI
+        float shrinkFactor = 0.20; // shrinks each bounding box by 20% to reduce overlaps and improve tracking
         clusterLidarWithROI((dataBuffer.end()-1)->boundingBoxes, (dataBuffer.end() - 1)->lidarPoints, shrinkFactor, P_rect_00, R_rect_00, RT);
 
-        // Visualize 3D objects
-        if(bVis)
+        // Visualize 3D objects for first frame
+        if (dataBuffer.size() == 1 && bVis)
         {
-            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), false);
+            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), false, trackedPrecedingVehicleTrackID);
         }
 
         cout << "#4 : CLUSTER LIDAR POINT CLOUD done" << endl;
@@ -417,29 +479,96 @@ int main(int argc, const char *argv[])
 
             /* COMPUTE TTC ON OBJECT IN FRONT */
 
-            // loop over all BB match pairs
-            for (auto it1 = (dataBuffer.end() - 1)->bbMatches.begin(); it1 != (dataBuffer.end() - 1)->bbMatches.end(); ++it1)
+            // Cluster all keypoint matches to bounding boxes (handles overlapping boxes)
+            // This ensures each match is assigned to at most one bounding box
+            auto clusterStats = clusterAllKptMatchesWithROI((dataBuffer.end() - 1)->boundingBoxes,
+                                                             (dataBuffer.end() - 2)->keypoints,
+                                                             (dataBuffer.end() - 1)->keypoints,
+                                                             (dataBuffer.end() - 1)->kptMatches);
+            
+            // Build a map for quick lookup of stats by boxID
+            std::map<int, std::tuple<int, int, int>> boxStatsMap;
+            for (const auto &stat : clusterStats)
             {
-                // find bounding boxes associates with current match
-                BoundingBox *prevBB, *currBB;
-                for (auto it2 = (dataBuffer.end() - 1)->boundingBoxes.begin(); it2 != (dataBuffer.end() - 1)->boundingBoxes.end(); ++it2)
+                int boxID = std::get<0>(stat);
+                boxStatsMap[boxID] = stat;
+            }
+
+            // Assign track IDs and find the tracked preceding vehicle
+            int currPrecedingVehicleBoxID = assignTrackIDsAndFindPreceding(
+                (dataBuffer.end() - 1)->boundingBoxes,
+                (dataBuffer.end() - 1)->bbMatches,
+                (dataBuffer.end() - 2)->boundingBoxes,
+                (dataBuffer.end() - 1)->cameraImg,
+                trackedPrecedingVehicleBoxID,
+                trackedPrecedingVehicleTrackID,
+                trackIDMap,
+                trackAgeMap);
+            
+            // Update camera image visualization with current tracking
+            if (bVis)
+            {
+                visualizeBoundingBoxes(
+                    (dataBuffer.end() - 1)->cameraImg,
+                    (dataBuffer.end() - 1)->boundingBoxes,
+                    class_names,
+                    trackedPrecedingVehicleTrackID);
+            }
+            
+            // Visualize 3D objects with tracking for subsequent frames
+            if (bVis)
+            {
+                show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), false, trackedPrecedingVehicleTrackID);
+            }
+            
+            // Find the previous frame's box that matches the current tracked box
+            int prevPrecedingVehicleBoxID = -1;
+            for (const auto &matchPair : (dataBuffer.end() - 1)->bbMatches)
+            {
+                if (matchPair.second == currPrecedingVehicleBoxID)
                 {
-                    if (it1->second == it2->boxID) // check wether current match partner corresponds to this BB
+                    prevPrecedingVehicleBoxID = matchPair.first;
+                    break;
+                }
+            }
+
+            // Find the bounding boxes for the preceding vehicle
+            BoundingBox *prevBB = nullptr, *currBB = nullptr;
+            
+            if (currPrecedingVehicleBoxID != -1)
+            {
+                // Find current BB
+                for (auto &bb : (dataBuffer.end() - 1)->boundingBoxes)
+                {
+                    if (bb.boxID == currPrecedingVehicleBoxID)
                     {
-                        currBB = &(*it2);
+                        currBB = &bb;
+                        break;
                     }
                 }
-
-                for (auto it2 = (dataBuffer.end() - 2)->boundingBoxes.begin(); it2 != (dataBuffer.end() - 2)->boundingBoxes.end(); ++it2)
+                
+                // Find matching previous BB
+                for (const auto &match : (dataBuffer.end() - 1)->bbMatches)
                 {
-                    if (it1->first == it2->boxID) // check wether current match partner corresponds to this BB
+                    if (match.second == currPrecedingVehicleBoxID)
                     {
-                        prevBB = &(*it2);
+                        int prevBoxID = match.first;
+                        for (auto &bb : (dataBuffer.end() - 2)->boundingBoxes)
+                        {
+                            if (bb.boxID == prevBoxID)
+                            {
+                                prevBB = &bb;
+                                break;
+                            }
+                        }
+                        break;
                     }
                 }
+            }
 
-                // compute TTC for current match
-                if( currBB->lidarPoints.size()>0 && prevBB->lidarPoints.size()>0 ) // only compute TTC if we have Lidar points
+            // compute TTC for the tracked preceding vehicle
+            if (currBB != nullptr && prevBB != nullptr && 
+                currBB->lidarPoints.size() > 0 && prevBB->lidarPoints.size() > 0)
                 {
                     //// STUDENT ASSIGNMENT
                     //// TASK FP.2 -> compute time-to-collision based on Lidar data (implement -> computeTTCLidar)
@@ -450,8 +579,8 @@ int main(int argc, const char *argv[])
                         // Test all methods and record results
                         TTCResult result;
                         result.frameIndex = imgStartIndex + imgIndex;
-                        result.prevBoxId = it1->first;
-                        result.currBoxId = it1->second;
+                        result.prevBoxId = prevPrecedingVehicleBoxID;
+                        result.currBoxId = currPrecedingVehicleBoxID;
                         
                         // Define methods to test
                         std::map<std::string, TTCMethod> methodNames = {
@@ -482,11 +611,61 @@ int main(int argc, const char *argv[])
                     //// TASK FP.3 -> assign enclosed keypoint matches to bounding box (implement -> clusterKptMatchesWithROI)
                     //// TASK FP.4 -> compute time-to-collision based on camera (implement -> computeTTCCamera)
                     double ttcCamera;
-                    clusterKptMatchesWithROI(*currBB, (dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints, (dataBuffer.end() - 1)->kptMatches);                    
+                    
+                    // Get cluster statistics for this box
+                    int matchesBefore = 0, matchesAfter = 0;
+                    if (boxStatsMap.find(currBB->boxID) != boxStatsMap.end())
+                    {
+                        matchesBefore = std::get<1>(boxStatsMap[currBB->boxID]);
+                        matchesAfter = std::get<2>(boxStatsMap[currBB->boxID]);
+                    }
+                    else
+                    {
+                        matchesAfter = static_cast<int>(currBB->kptMatches.size());
+                    }
+                    
+                    // Record FP.3 statistics if enabled
+                    if (bRecordKptStats && matchesAfter > 0)
+                    {
+                        KptMatchStats stats;
+                        stats.frameIndex = imgStartIndex + imgIndex;
+                        stats.boxId = currBB->boxID;
+                        stats.matchesBefore = matchesBefore;
+                        stats.matchesAfter = matchesAfter;
+                        stats.outliersRemovedPct = (matchesBefore > 0) ? (100.0 * (matchesBefore - matchesAfter) / matchesBefore) : 0.0;
+                        
+                        // Calculate distance statistics
+                        std::vector<double> distances;
+                        for (const auto &match : currBB->kptMatches)
+                        {
+                            const cv::KeyPoint &prevKp = (dataBuffer.end() - 2)->keypoints[match.queryIdx];
+                            const cv::KeyPoint &currKp = (dataBuffer.end() - 1)->keypoints[match.trainIdx];
+                            double dist = cv::norm(prevKp.pt - currKp.pt);
+                            distances.push_back(dist);
+                        }
+                        
+                        if (!distances.empty())
+                        {
+                            stats.meanDistance = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
+                            std::sort(distances.begin(), distances.end());
+                            stats.medianDistance = distances[distances.size() / 2];
+                            double sq_sum = std::inner_product(distances.begin(), distances.end(), distances.begin(), 0.0);
+                            stats.stddevDistance = std::sqrt(sq_sum / distances.size() - stats.meanDistance * stats.meanDistance);
+                        }
+                        else
+                        {
+                            stats.meanDistance = 0.0;
+                            stats.medianDistance = 0.0;
+                            stats.stddevDistance = 0.0;
+                        }
+                        
+                        kptMatchStats.push_back(stats);
+                    }
+                    
                     computeTTCCamera((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints, currBB->kptMatches, sensorFrameRate, ttcCamera);
                     //// EOF STUDENT ASSIGNMENT
 
-                    bVis = true;
+                    bVis = false;  // Disable visualization for automated runs
                     if (bVis)
                     {
                         cv::Mat visImg = (dataBuffer.end() - 1)->cameraImg.clone();
@@ -500,12 +679,10 @@ int main(int argc, const char *argv[])
                         cv::namedWindow(windowName, 4);
                         cv::imshow(windowName, visImg);
                         cout << "Press key to continue to next frame" << endl;
-                        cv::waitKey(0);
+                        cv::waitKey(10);  // Short wait for visualization
                     }
-                    bVis = false;
 
-                } // eof TTC computation
-            } // eof loop over all BB matches            
+                } // eof TTC computation for tracked preceding vehicle            
 
         }
 
@@ -630,6 +807,42 @@ int main(int argc, const char *argv[])
             std::cout << "\nFP.2 TTC comparison results saved to " << csvFilename << std::endl;
             std::cout << "Total TTC records: " << ttcResults.size() << std::endl;
             std::cout << "Use: python analysis/fp2_analysis.py --csv " << csvFilename << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Save FP.3 keypoint match filtering results to CSV for Python analysis
+    if (bRecordKptStats && !kptMatchStats.empty())
+    {
+        std::string csvFilename = "kpt_matches_filtering.csv";
+        std::ofstream csvFile(csvFilename);
+        
+        if (csvFile.is_open())
+        {
+            // Write CSV header
+            csvFile << "frame_index,box_id,matches_before,matches_after,outliers_removed_pct,mean_distance,median_distance,stddev_distance\n";
+            
+            // Write data rows
+            for (const auto& stats : kptMatchStats)
+            {
+                csvFile << stats.frameIndex << ","
+                        << stats.boxId << ","
+                        << stats.matchesBefore << ","
+                        << stats.matchesAfter << ","
+                        << std::fixed << std::setprecision(2)
+                        << stats.outliersRemovedPct << ","
+                        << stats.meanDistance << ","
+                        << stats.medianDistance << ","
+                        << stats.stddevDistance << "\n";
+            }
+            
+            csvFile.close();
+            std::cout << "\nFP.3 Keypoint match filtering results saved to " << csvFilename << std::endl;
+            std::cout << "Total records: " << kptMatchStats.size() << std::endl;
+            std::cout << "Use: python analysis/fp3_analysis.py --csv " << csvFilename << std::endl;
         }
         else
         {
