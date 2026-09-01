@@ -1,3 +1,11 @@
+/**
+ * @file FinalProject_Camera.cpp
+ * @brief Main application for sensor fusion and TTC computation
+ *
+ * This is the main entry point for the 3D object tracking application.
+ * It loads KITTI dataset images and LIDAR data, performs object detection,
+ * feature matching, and computes TTC using both LIDAR and camera sensors.
+ */
 
 /* INCLUDES FOR THIS PROJECT */
 #include <iostream>
@@ -30,7 +38,22 @@ using namespace std;
 using namespace kp;
 
 
-/* MAIN PROGRAM */
+/**
+ * @brief Main entry point for the 3D object tracking application
+ *
+ * Processes a sequence of KITTI dataset frames, performing:
+ * 1. Object detection using YOLOv7-tiny ONNX model
+ * 2. LIDAR point clustering within bounding boxes
+ * 3. Keypoint detection and matching between frames
+ * 4. Bounding box matching across frames
+ * 5. Object tracking with track IDs
+ * 6. TTC computation using both LIDAR and camera sensors
+ * 7. Visualization of 3D objects and camera images
+ *
+ * @param argc Number of command-line arguments
+ * @param argv Command-line arguments
+ * @return 0 on success
+ */
 int main(int argc, const char *argv[])
 {
     /* INIT VARIABLES AND DATA STRUCTURES */
@@ -43,9 +66,12 @@ int main(int argc, const char *argv[])
     string imgPrefix = "KITTI/2011_09_26/image_02/data/000000"; // left camera, color
     string imgFileType = ".png";
     int imgStartIndex = 0; // first file index to load (assumes Lidar and camera names have identical naming convention)
-    int imgEndIndex = 18;   // last file index to load
+    int imgEndIndex = 18;   // last file index to load (10 fps dataset)
     int imgStepWidth = 1; 
     int imgFillWidth = 4;  // no. of digits which make up the file index (e.g. img-0001.png)
+    
+    // Camera TTC: minimum distance threshold for keypoint pairs (single source of truth)
+    double cameraMinDist = 110.0;
 
     // Comprehensive testing mode: test all detector-descriptor combinations
     bool bTestAllCombinations = false;
@@ -65,6 +91,7 @@ int main(int argc, const char *argv[])
     // For FP.1 analysis: store bounding box match data
     struct BBMatchData {
         int frameIndex;
+        int trackId;  // Track ID of the matched object (for filtering to preceding vehicle)
         int prevBoxId;
         int currBoxId;
         int matchCount;
@@ -83,6 +110,7 @@ int main(int argc, const char *argv[])
     struct TTCResult
     {
         int frameIndex;
+        int trackId;  // Track ID of the preceding vehicle (stable across frames)
         int prevBoxId;
         int currBoxId;
         std::map<std::string, double> ttcValues; // method name -> TTC value
@@ -93,6 +121,7 @@ int main(int argc, const char *argv[])
     struct KptMatchStats
     {
         int frameIndex;
+        int trackId;  // Track ID of the bounding box
         int boxId;
         int matchesBefore;
         int matchesAfter;
@@ -103,6 +132,37 @@ int main(int argc, const char *argv[])
     };
     std::vector<KptMatchStats> kptMatchStats;
     bool bRecordKptStats = true; // Enable to record FP.3 statistics
+
+    // For FP.4: Store camera-based TTC results
+    struct CameraTTCResult
+    {
+        int frameIndex;
+        int trackId;  // Track ID of the preceding vehicle (stable across frames)
+        int prevBoxId;
+        int currBoxId;
+        double ttcCamera;
+    };
+    std::vector<CameraTTCResult> cameraTTCResults;
+    bool bRecordCameraTTC = true; // Enable to record FP.4 camera TTC results
+    
+    // For FP.4 debugging: Store distance ratio statistics to analyze background filtering
+    struct CameraTTCScaleStats
+    {
+        int frameIndex;
+        int trackId;  // Track ID of the preceding vehicle (stable across frames)
+        int numRatios;
+        double minRatio;
+        double maxRatio;
+        double medianRatio;
+        double meanRatio;
+        double stddevRatio;
+        int numFiltered; // Number of ratios after background filtering
+        double filteredMinRatio;
+        double filteredMaxRatio;
+        double filteredMedianRatio;
+    };
+    std::vector<CameraTTCScaleStats> cameraTTCScaleStats;
+    bool bRecordCameraScaleStats = true; // Enable to record distance ratio statistics
 
     // Load class names from coco.yaml
     std::string yolo_base_path = dataPath + "dat/yolo/";
@@ -154,16 +214,19 @@ int main(int argc, const char *argv[])
     P_rect_00.at<double>(2,0) = 0.000000e+00; P_rect_00.at<double>(2,1) = 0.000000e+00; P_rect_00.at<double>(2,2) = 1.000000e+00; P_rect_00.at<double>(2,3) = 0.000000e+00;    
 
     // misc
-    double sensorFrameRate = 10.0 / imgStepWidth; // frames per second for Lidar and camera
+    double sensorFrameRate = 10.0 / imgStepWidth; // frames per second for Lidar and camera (10 fps dataset)
     int dataBufferSize = 2;       // no. of images which are held in memory (ring buffer) at the same time
     vector<DataFrame> dataBuffer; // list of data frames which are held in memory at the same time
     bool bVis = true;             // visualize results
     
     // For tracking objects across frames
-    int trackedPrecedingVehicleBoxID = -1; // -1 means not yet initialized
-    int trackedPrecedingVehicleTrackID = -1; // -1 means not yet initialized
+    // trackedPrecedingVehicleTrackID is the main identifier: >= 0 means preceding vehicle is tracked
+    // trackedPrecedingVehicleBoxID is cached for fast lookup (avoids searching through all boxes)
+    int trackedPrecedingVehicleBoxID = -1; // Cached boxID for fast lookup
+    int trackedPrecedingVehicleTrackID = -1; // Main identifier: >= 0 means tracked, -1 means not yet initialized
     std::map<int, int> trackIDMap; // Maps current boxID to trackID
     std::map<int, int> trackAgeMap; // Maps trackID to age
+    int nextTrackID = 0; // Counter for assigning new unique track IDs (0, 1, 2, ...)
 
     /* MAIN LOOP OVER ALL IMAGES */
 
@@ -227,37 +290,30 @@ int main(int argc, const char *argv[])
     
         (dataBuffer.end() - 1)->lidarPoints = lidarPoints;
 
-        // Initialize trackID and trackAge for first frame's bounding boxes
-        // Note: Use negative trackIDs for frame 0 so they don't conflict with the counter in assignTrackIDsAndFindPreceding
+        // For frame 0, assign initial track IDs starting from nextTrackID (0)
+        // and find the preceding vehicle
         if (dataBuffer.size() == 1)
         {
-            // Use negative trackIDs for frame 0 to avoid conflicts with the positive counter
-            // in assignTrackIDsAndFindPreceding (which starts at 0)
+            // Assign track IDs starting from nextTrackID for frame 0
             for (size_t i = 0; i < (dataBuffer.end() - 1)->boundingBoxes.size(); ++i)
             {
                 auto &bb = (dataBuffer.end() - 1)->boundingBoxes[i];
-                bb.trackID = -(i + 1); // Negative trackIDs: -1, -2, -3, ...
+                bb.trackID = nextTrackID++; // Assign and increment: 0, 1, 2, ...
                 bb.trackAge = 0;
-                // Also initialize the track maps for consistency
+                // Initialize the track maps
                 trackIDMap[bb.boxID] = bb.trackID;
                 trackAgeMap[bb.trackID] = bb.trackAge;
             }
             
             // Find and track the preceding vehicle for frame 0
+            // trackedPrecedingVehicleTrackID is the main identifier (>= 0 means tracked)
+            // trackedPrecedingVehicleBoxID is cached for fast lookup
             trackedPrecedingVehicleBoxID = findPrecedingVehicleBox((dataBuffer.end() - 1)->boundingBoxes, (dataBuffer.end() - 1)->cameraImg);
-            if (trackedPrecedingVehicleBoxID != -1)
-            {
-                for (const auto &bb : (dataBuffer.end() - 1)->boundingBoxes)
-                {
-                    if (bb.boxID == trackedPrecedingVehicleBoxID)
-                    {
-                        trackedPrecedingVehicleTrackID = bb.trackID;
-                        break;
-                    }
-                }
-            }
+            trackedPrecedingVehicleTrackID = (trackedPrecedingVehicleBoxID != -1)
+                ? findTrackIDForGivenBoxID((dataBuffer.end() - 1)->boundingBoxes, trackedPrecedingVehicleBoxID)
+                : -1;
             
-            // Visualize bounding boxes for frame 0 with tracking colors
+            // Visualize bounding boxes for frame 0
             if (bVis)
             {
                 visualizeBoundingBoxes(
@@ -274,13 +330,13 @@ int main(int argc, const char *argv[])
         /* CLUSTER LIDAR POINT CLOUD */
 
         // associate Lidar points with camera-based ROI
-        float shrinkFactor = 0.20; // shrinks each bounding box by 20% to reduce overlaps and improve tracking
+        float shrinkFactor = 0.10; // shrinks each bounding box by 10% to balance overlap reduction and data retention
         clusterLidarWithROI((dataBuffer.end()-1)->boundingBoxes, (dataBuffer.end() - 1)->lidarPoints, shrinkFactor, P_rect_00, R_rect_00, RT);
 
         // Visualize 3D objects for first frame
         if (dataBuffer.size() == 1 && bVis)
         {
-            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), false, trackedPrecedingVehicleTrackID);
+            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true, trackedPrecedingVehicleTrackID);
         }
 
         cout << "#4 : CLUSTER LIDAR POINT CLOUD done" << endl;
@@ -459,8 +515,16 @@ int main(int argc, const char *argv[])
                 int currBoxID = pair.second;
                 int count = matchCounts[{prevBoxID, currBoxID}];
                 
+                // Get track ID from previous frame's trackIDMap
+                int trackId = -1;
+                if (trackIDMap.find(prevBoxID) != trackIDMap.end())
+                {
+                    trackId = trackIDMap.at(prevBoxID);
+                }
+                
                 bbMatchResults.push_back({
                     static_cast<int>(imgStartIndex + imgIndex),
+                    trackId,
                     prevBoxID,
                     currBoxID,
                     count
@@ -495,7 +559,9 @@ int main(int argc, const char *argv[])
             }
 
             // Assign track IDs and find the tracked preceding vehicle
-            int currPrecedingVehicleBoxID = assignTrackIDsAndFindPreceding(
+            // trackedPrecedingVehicleTrackID >= 0 indicates the preceding vehicle is tracked
+            // trackedPrecedingVehicleBoxID is cached for fast lookup
+            assignTrackIDsAndFindPreceding(
                 (dataBuffer.end() - 1)->boundingBoxes,
                 (dataBuffer.end() - 1)->bbMatches,
                 (dataBuffer.end() - 2)->boundingBoxes,
@@ -503,7 +569,8 @@ int main(int argc, const char *argv[])
                 trackedPrecedingVehicleBoxID,
                 trackedPrecedingVehicleTrackID,
                 trackIDMap,
-                trackAgeMap);
+                trackAgeMap,
+                nextTrackID);
             
             // Update camera image visualization with current tracking
             if (bVis)
@@ -518,29 +585,20 @@ int main(int argc, const char *argv[])
             // Visualize 3D objects with tracking for subsequent frames
             if (bVis)
             {
-                show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), false, trackedPrecedingVehicleTrackID);
-            }
-            
-            // Find the previous frame's box that matches the current tracked box
-            int prevPrecedingVehicleBoxID = -1;
-            for (const auto &matchPair : (dataBuffer.end() - 1)->bbMatches)
-            {
-                if (matchPair.second == currPrecedingVehicleBoxID)
-                {
-                    prevPrecedingVehicleBoxID = matchPair.first;
-                    break;
-                }
+                show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true, trackedPrecedingVehicleTrackID);
             }
 
-            // Find the bounding boxes for the preceding vehicle
+            // Find the bounding boxes for the preceding vehicle using the cached boxID
             BoundingBox *prevBB = nullptr, *currBB = nullptr;
+            int prevPrecedingVehicleBoxID = -1;  // Previous frame's boxID for the tracked vehicle
             
-            if (currPrecedingVehicleBoxID != -1)
+            // Only proceed if we have a tracked preceding vehicle (trackID >= 0)
+            if (trackedPrecedingVehicleTrackID >= 0 && trackedPrecedingVehicleBoxID != -1)
             {
-                // Find current BB
+                // Find current BB using the cached boxID
                 for (auto &bb : (dataBuffer.end() - 1)->boundingBoxes)
                 {
-                    if (bb.boxID == currPrecedingVehicleBoxID)
+                    if (bb.boxID == trackedPrecedingVehicleBoxID)
                     {
                         currBB = &bb;
                         break;
@@ -550,12 +608,12 @@ int main(int argc, const char *argv[])
                 // Find matching previous BB
                 for (const auto &match : (dataBuffer.end() - 1)->bbMatches)
                 {
-                    if (match.second == currPrecedingVehicleBoxID)
+                    if (match.second == trackedPrecedingVehicleBoxID)
                     {
-                        int prevBoxID = match.first;
+                        prevPrecedingVehicleBoxID = match.first;
                         for (auto &bb : (dataBuffer.end() - 2)->boundingBoxes)
                         {
-                            if (bb.boxID == prevBoxID)
+                            if (bb.boxID == prevPrecedingVehicleBoxID)
                             {
                                 prevBB = &bb;
                                 break;
@@ -579,8 +637,9 @@ int main(int argc, const char *argv[])
                         // Test all methods and record results
                         TTCResult result;
                         result.frameIndex = imgStartIndex + imgIndex;
+                        result.trackId = trackedPrecedingVehicleTrackID;
                         result.prevBoxId = prevPrecedingVehicleBoxID;
-                        result.currBoxId = currPrecedingVehicleBoxID;
+                        result.currBoxId = trackedPrecedingVehicleBoxID;
                         
                         // Define methods to test
                         std::map<std::string, TTCMethod> methodNames = {
@@ -612,7 +671,7 @@ int main(int argc, const char *argv[])
                     //// TASK FP.4 -> compute time-to-collision based on camera (implement -> computeTTCCamera)
                     double ttcCamera;
                     
-                    // Get cluster statistics for this box
+                    // For FP.3: Get cluster statistics for this box
                     int matchesBefore = 0, matchesAfter = 0;
                     if (boxStatsMap.find(currBB->boxID) != boxStatsMap.end())
                     {
@@ -629,6 +688,7 @@ int main(int argc, const char *argv[])
                     {
                         KptMatchStats stats;
                         stats.frameIndex = imgStartIndex + imgIndex;
+                        stats.trackId = currBB->trackID;  // Track ID for filtering
                         stats.boxId = currBB->boxID;
                         stats.matchesBefore = matchesBefore;
                         stats.matchesAfter = matchesAfter;
@@ -662,7 +722,91 @@ int main(int argc, const char *argv[])
                         kptMatchStats.push_back(stats);
                     }
                     
-                    computeTTCCamera((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints, currBB->kptMatches, sensorFrameRate, ttcCamera);
+                    // For FP.4: Get keypoint matches for the matched bounding box pair
+                    // We need matches where prev keypoint is in prevBB AND curr keypoint is in currBB
+                    std::vector<cv::DMatch> pairedMatches = getKptMatchesForBBPair(
+                        *prevBB, *currBB,
+                        (dataBuffer.end() - 2)->keypoints,
+                        (dataBuffer.end() - 1)->keypoints,
+                        (dataBuffer.end() - 1)->kptMatches);
+                    
+                    // Apply the same filtering as FP.3 for consistency
+                    pairedMatches = filterMatchesByDistance(pairedMatches,
+                        (dataBuffer.end() - 2)->keypoints,
+                        (dataBuffer.end() - 1)->keypoints);
+                    
+                    // Compute distance ratios for debugging/analysis
+                    std::vector<double> distRatios;
+                    for (auto it1 = pairedMatches.begin(); it1 != pairedMatches.end() - 1; ++it1)
+                    {
+                        const cv::KeyPoint &kpOuterCurr = (dataBuffer.end() - 1)->keypoints.at(it1->trainIdx);
+                        const cv::KeyPoint &kpOuterPrev = (dataBuffer.end() - 2)->keypoints.at(it1->queryIdx);
+                        
+                        for (auto it2 = it1 + 1; it2 != pairedMatches.end(); ++it2)
+                        {
+                            const cv::KeyPoint &kpInnerCurr = (dataBuffer.end() - 1)->keypoints.at(it2->trainIdx);
+                            const cv::KeyPoint &kpInnerPrev = (dataBuffer.end() - 2)->keypoints.at(it2->queryIdx);
+                            
+                            double distCurr = cv::norm(kpOuterCurr.pt - kpInnerCurr.pt);
+                            double distPrev = cv::norm(kpOuterPrev.pt - kpInnerPrev.pt);
+                            
+                            if (distPrev > std::numeric_limits<double>::epsilon() && 
+                                distCurr >= cameraMinDist && distPrev >= cameraMinDist)
+                            {
+                                double distRatio = distCurr / distPrev;
+                                distRatios.push_back(distRatio);
+                            }
+                        }
+                    }
+                    
+                    computeTTCCamera((dataBuffer.end() - 2)->keypoints, (dataBuffer.end() - 1)->keypoints, pairedMatches, sensorFrameRate, cameraMinDist, ttcCamera);
+                    
+                    // Record FP.4 camera TTC results
+                    if (bRecordCameraTTC)
+                    {
+                        CameraTTCResult cameraResult;
+                        cameraResult.frameIndex = imgStartIndex + imgIndex;
+                        cameraResult.trackId = trackedPrecedingVehicleTrackID;
+                        cameraResult.prevBoxId = prevPrecedingVehicleBoxID;
+                        cameraResult.currBoxId = trackedPrecedingVehicleBoxID;
+                        cameraResult.ttcCamera = ttcCamera;
+                        cameraTTCResults.push_back(cameraResult);
+                    }
+                    
+                    // Record distance ratio statistics for analysis
+                    if (bRecordCameraScaleStats && !distRatios.empty())
+                    {
+                        CameraTTCScaleStats stats;
+                        stats.frameIndex = imgStartIndex + imgIndex;
+                        stats.trackId = trackedPrecedingVehicleTrackID;
+                        stats.numRatios = static_cast<int>(distRatios.size());
+                        
+                        if (!distRatios.empty())
+                        {
+                            stats.minRatio = *std::min_element(distRatios.begin(), distRatios.end());
+                            stats.maxRatio = *std::max_element(distRatios.begin(), distRatios.end());
+                            stats.medianRatio = computeMedian(distRatios);
+                            stats.meanRatio = std::accumulate(distRatios.begin(), distRatios.end(), 0.0) / distRatios.size();
+                            double sq_sum = std::inner_product(distRatios.begin(), distRatios.end(), distRatios.begin(), 0.0);
+                            stats.stddevRatio = std::sqrt(sq_sum / distRatios.size() - stats.meanRatio * stats.meanRatio);
+                        }
+                        else
+                        {
+                            stats.minRatio = 0.0;
+                            stats.maxRatio = 0.0;
+                            stats.medianRatio = 0.0;
+                            stats.meanRatio = 0.0;
+                            stats.stddevRatio = 0.0;
+                        }
+                        
+                        // Without background filtering, all ratios are retained
+                        stats.numFiltered = stats.numRatios;
+                        stats.filteredMinRatio = stats.minRatio;
+                        stats.filteredMaxRatio = stats.maxRatio;
+                        stats.filteredMedianRatio = stats.medianRatio;
+                        
+                        cameraTTCScaleStats.push_back(stats);
+                    }
                     //// EOF STUDENT ASSIGNMENT
 
                     bVis = false;  // Disable visualization for automated runs
@@ -729,18 +873,19 @@ int main(int argc, const char *argv[])
     // Save FP.1 bounding box match results to CSV for Python analysis
     if (!bbMatchResults.empty())
     {
-        std::string bbCsvFilename = "bb_matches.csv";
+        std::string bbCsvFilename = dataPath + "analysis/output/bb_matches.csv";
         std::ofstream bbCsvFile(bbCsvFilename);
         
         if (bbCsvFile.is_open())
         {
             // Write CSV header
-            bbCsvFile << "frame_index,prev_box_id,curr_box_id,match_count\n";
+            bbCsvFile << "frame_index,track_id,prev_box_id,curr_box_id,match_count\n";
             
             // Write data rows
             for (const auto& result : bbMatchResults)
             {
                 bbCsvFile << result.frameIndex << ","
+                          << result.trackId << ","
                           << result.prevBoxId << ","
                           << result.currBoxId << ","
                           << result.matchCount << "\n";
@@ -749,7 +894,7 @@ int main(int argc, const char *argv[])
             bbCsvFile.close();
             std::cout << "\nFP.1 Bounding box match results saved to " << bbCsvFilename << std::endl;
             std::cout << "Total matches recorded: " << bbMatchResults.size() << std::endl;
-            std::cout << "Use: python analysis/fp1_analysis.py --csv " << bbCsvFilename << std::endl;
+            std::cout << "Use: python analysis/fp1_analysis.py" << std::endl;
         }
         else
         {
@@ -760,13 +905,13 @@ int main(int argc, const char *argv[])
     // Save FP.2 TTC comparison results to CSV for Python analysis
     if (bTestAllTTCMethods && !ttcResults.empty())
     {
-        std::string csvFilename = "ttc_lidar_comparison.csv";
+        std::string csvFilename = dataPath + "analysis/output/ttc_lidar_comparison.csv";
         std::ofstream csvFile(csvFilename);
         
         if (csvFile.is_open())
         {
             // Write header
-            csvFile << "frame_index,prev_box_id,curr_box_id,";
+            csvFile << "frame_index,track_id,prev_box_id,curr_box_id,";
             std::vector<std::string> methodNames =
             {
                 "unfiltered", "percentile_mean", "percentile_median"
@@ -781,6 +926,7 @@ int main(int argc, const char *argv[])
             for (const auto& result : ttcResults)
             {
                 csvFile << result.frameIndex << ","
+                        << result.trackId << ","
                         << result.prevBoxId << ","
                         << result.currBoxId << ",";
                 
@@ -806,7 +952,7 @@ int main(int argc, const char *argv[])
             csvFile.close();
             std::cout << "\nFP.2 TTC comparison results saved to " << csvFilename << std::endl;
             std::cout << "Total TTC records: " << ttcResults.size() << std::endl;
-            std::cout << "Use: python analysis/fp2_analysis.py --csv " << csvFilename << std::endl;
+            std::cout << "Use: python analysis/fp2_analysis.py" << std::endl;
         }
         else
         {
@@ -817,18 +963,19 @@ int main(int argc, const char *argv[])
     // Save FP.3 keypoint match filtering results to CSV for Python analysis
     if (bRecordKptStats && !kptMatchStats.empty())
     {
-        std::string csvFilename = "kpt_matches_filtering.csv";
+        std::string csvFilename = dataPath + "analysis/output/kpt_matches_filtering.csv";
         std::ofstream csvFile(csvFilename);
         
         if (csvFile.is_open())
         {
             // Write CSV header
-            csvFile << "frame_index,box_id,matches_before,matches_after,outliers_removed_pct,mean_distance,median_distance,stddev_distance\n";
+            csvFile << "frame_index,track_id,box_id,matches_before,matches_after,outliers_removed_pct,mean_distance,median_distance,stddev_distance\n";
             
             // Write data rows
             for (const auto& stats : kptMatchStats)
             {
                 csvFile << stats.frameIndex << ","
+                        << stats.trackId << ","
                         << stats.boxId << ","
                         << stats.matchesBefore << ","
                         << stats.matchesAfter << ","
@@ -842,12 +989,108 @@ int main(int argc, const char *argv[])
             csvFile.close();
             std::cout << "\nFP.3 Keypoint match filtering results saved to " << csvFilename << std::endl;
             std::cout << "Total records: " << kptMatchStats.size() << std::endl;
-            std::cout << "Use: python analysis/fp3_analysis.py --csv " << csvFilename << std::endl;
+            std::cout << "Use: python analysis/fp3_analysis.py" << std::endl;
         }
         else
         {
             std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
         }
+    }
+
+    // Save FP.4 camera-based TTC results to CSV for Python analysis
+    if (bRecordCameraTTC && !cameraTTCResults.empty())
+    {
+        std::string csvFilename = dataPath + "analysis/output/ttc_camera.csv";
+        std::ofstream csvFile(csvFilename);
+        
+        if (csvFile.is_open())
+        {
+            // Write CSV header
+            csvFile << "frame_index,track_id,prev_box_id,curr_box_id,ttc_camera\n";
+            
+            // Write data rows
+            for (const auto& result : cameraTTCResults)
+            {
+                csvFile << result.frameIndex << ","
+                        << result.trackId << ","
+                        << result.prevBoxId << ","
+                        << result.currBoxId << ",";
+                
+                if (std::isnan(result.ttcCamera))
+                {
+                    csvFile << "nan";
+                }
+                else
+                {
+                    csvFile << result.ttcCamera;
+                }
+                csvFile << "\n";
+            }
+            
+            csvFile.close();
+            std::cout << "\nCamera TTC results saved to " << csvFilename << std::endl;
+            std::cout << "Total TTC records: " << cameraTTCResults.size() << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Save FP.4 distance ratio scale statistics to CSV for analysis
+    if (bRecordCameraScaleStats && !cameraTTCScaleStats.empty())
+    {
+        std::string csvFilename = dataPath + "analysis/output/ttc_camera_scale_stats.csv";
+        std::ofstream csvFile(csvFilename);
+        
+        if (csvFile.is_open())
+        {
+            // Write CSV header
+            csvFile << "frame_index,track_id,num_ratios,min_ratio,max_ratio,median_ratio,mean_ratio,stddev_ratio,";
+            csvFile << "num_filtered,filtered_min,filtered_max,filtered_median\n";
+            
+            // Write data rows
+            for (const auto& stats : cameraTTCScaleStats)
+            {
+                csvFile << stats.frameIndex << ","
+                        << stats.trackId << ","
+                        << stats.numRatios << ","
+                        << stats.minRatio << ","
+                        << stats.maxRatio << ","
+                        << stats.medianRatio << ","
+                        << stats.meanRatio << ","
+                        << stats.stddevRatio << ","
+                        << stats.numFiltered << ","
+                        << stats.filteredMinRatio << ","
+                        << stats.filteredMaxRatio << ","
+                        << stats.filteredMedianRatio << "\n";
+            }
+            
+            csvFile.close();
+            std::cout << "\nFP.4 Camera TTC scale statistics saved to " << csvFilename << std::endl;
+            std::cout << "Total scale stat records: " << cameraTTCScaleStats.size() << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Write the tracked preceding vehicle track ID to a file for Python analysis scripts
+    // This ensures analysis scripts always use the correct track_id, regardless of YOLO detection order
+    std::string trackIdFilename = dataPath + "analysis/output/tracked_preceding_vehicle_track_id.txt";
+    std::ofstream trackIdFile(trackIdFilename);
+    
+    if (trackIdFile.is_open())
+    {
+        trackIdFile << trackedPrecedingVehicleTrackID << "\n";
+        trackIdFile.close();
+        std::cout << "\nTracked preceding vehicle track_id saved to: " << trackIdFilename << std::endl;
+        std::cout << "Value: " << trackedPrecedingVehicleTrackID << std::endl;
+    }
+    else
+    {
+        std::cerr << "Error: Could not open " << trackIdFilename << " for writing" << std::endl;
     }
 
     return 0;

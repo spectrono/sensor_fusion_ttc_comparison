@@ -93,8 +93,4 @@ uv.lock
 # Large version of the yolov7 model, currently only tiny is used!
 yolov7.onnx.gz
 
-# Generated CSV output files
-*.csv
-
-# Generated plot images
-*.png
+# Generated output files (CSV and PNG) in analysis/output/ are tracked as they are referenced by README

@@ -15,6 +15,32 @@ import numpy as np
 import os
 
 
+def get_tracked_vehicle_track_id(track_id_file=None):
+    """
+    Read the tracked preceding vehicle track_id from file.
+    
+    Args:
+        track_id_file: Path to the file containing the track_id (default: output/tracked_preceding_vehicle_track_id.txt)
+    
+    Returns:
+        The track_id as an integer, or None if not found
+    """
+    if track_id_file is None:
+        track_id_file = "output/tracked_preceding_vehicle_track_id.txt"
+    
+    if os.path.exists(track_id_file):
+        try:
+            with open(track_id_file, 'r') as f:
+                track_id = int(f.read().strip())
+                return track_id
+        except (ValueError, IOError) as e:
+            print(f"Warning: Could not read track_id from {track_id_file}: {e}")
+            return None
+    else:
+        print(f"Warning: track_id file not found at {track_id_file}")
+        return None
+
+
 def load_data(csv_path):
     """Load TTC comparison data from CSV."""
     df = pd.read_csv(csv_path)
@@ -35,15 +61,38 @@ def plot_ttc_comparison(df, output_prefix="fp2_ttc"):
     # Create output directory if needed
     os.makedirs("output", exist_ok=True)
     
-    # Filter for preceding vehicle (typically boxID 1 in KITTI sequence)
-    # Try boxID 1 first, then boxID 0, then use all data
-    df_preceding = df[df['curr_box_id'] == 1].copy()
+    # Filter for preceding vehicle using track_id from file
+    # The CSV contains: frame_index, track_id, prev_box_id, curr_box_id, ...
+    tracked_track_id = get_tracked_vehicle_track_id()
     
-    if len(df_preceding) == 0:
-        df_preceding = df[df['curr_box_id'] == 0].copy()
-    if len(df_preceding) == 0:
-        print("Warning: No data for preceding vehicle, using all data")
-        df_preceding = df.copy()
+    if 'track_id' in df.columns and tracked_track_id is not None:
+        # Use the track_id from the file
+        track_data = df[df['track_id'] == tracked_track_id]
+        if len(track_data) > 0:
+            df_preceding = track_data.copy()
+            print(f"  Using track_id={tracked_track_id} (from tracked_preceding_vehicle_track_id.txt) for analysis")
+        else:
+            print(f"  Warning: track_id={tracked_track_id} not found in data, using all data")
+            df_preceding = df.copy()
+    elif 'track_id' in df.columns:
+        # track_id file not found, fallback to most common track_id
+        track_ids = df['track_id'].mode()
+        if len(track_ids) > 0:
+            tracked_track_id = track_ids[0]
+            df_preceding = df[df['track_id'] == tracked_track_id].copy()
+            print(f"  Warning: track_id file not found, using most common track_id={tracked_track_id}")
+        else:
+            print("  Warning: No track_id data found, using all data")
+            df_preceding = df.copy()
+    else:
+        # Fallback: try curr_box_id == 1 then 0 (legacy behavior)
+        print("  Warning: No track_id column found, falling back to curr_box_id filtering")
+        df_preceding = df[df['curr_box_id'] == 1].copy()
+        if len(df_preceding) == 0:
+            df_preceding = df[df['curr_box_id'] == 0].copy()
+        if len(df_preceding) == 0:
+            print("  Warning: No data for preceding vehicle, using all data")
+            df_preceding = df.copy()
     
     # Replace 'nan' strings with actual NaN
     for method in method_order:
@@ -65,6 +114,9 @@ def plot_ttc_comparison(df, output_prefix="fp2_ttc"):
     plt.ylabel('TTC (seconds)')
     plt.grid(True, alpha=0.3)
     plt.legend(title='Method', loc='best')
+    # Set integer ticks on x-axis
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     
     # Plot 2: Boxplot comparison
     plt.subplot(2, 2, 2)
@@ -117,6 +169,9 @@ def plot_ttc_comparison(df, output_prefix="fp2_ttc"):
         plt.xlabel('Frame Index')
         plt.ylabel('TTC Difference (seconds)')
         plt.grid(True, alpha=0.3)
+        # Set integer ticks on x-axis
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     
     plt.tight_layout()
     
@@ -166,12 +221,32 @@ def analyze_stability(df, method_order):
     print("FP.2: TTC STABILITY ANALYSIS")
     print("="*80)
     
-    # Filter for preceding vehicle (typically boxID 1 in KITTI sequence)
-    df_preceding = df[df['curr_box_id'] == 1].copy()
-    if len(df_preceding) == 0:
-        df_preceding = df[df['curr_box_id'] == 0].copy()
-    if len(df_preceding) == 0:
-        df_preceding = df.copy()
+    # Filter for preceding vehicle using track_id from file
+    tracked_track_id = get_tracked_vehicle_track_id()
+    
+    if 'track_id' in df.columns and tracked_track_id is not None:
+        # Use the track_id from the file
+        track_data = df[df['track_id'] == tracked_track_id]
+        if len(track_data) > 0:
+            df_preceding = track_data.copy()
+        else:
+            print(f"  Warning: track_id={tracked_track_id} not found in data, using all data")
+            df_preceding = df.copy()
+    elif 'track_id' in df.columns:
+        # track_id file not found, fallback to most common track_id
+        track_ids = df['track_id'].mode()
+        if len(track_ids) > 0:
+            tracked_track_id = track_ids[0]
+            df_preceding = df[df['track_id'] == tracked_track_id].copy()
+        else:
+            df_preceding = df.copy()
+    else:
+        # Fallback: try curr_box_id == 1 then 0 (legacy behavior)
+        df_preceding = df[df['curr_box_id'] == 1].copy()
+        if len(df_preceding) == 0:
+            df_preceding = df[df['curr_box_id'] == 0].copy()
+        if len(df_preceding) == 0:
+            df_preceding = df.copy()
     
     for method in method_order:
         if method not in df_preceding.columns:
@@ -234,9 +309,28 @@ def main():
         plt.figure(figsize=(16, 12))
         plt.suptitle('FP.2: Lidar TTC Method Comparison', fontsize=16, fontweight='bold')
         
-        df_preceding = df[df['curr_box_id'] == 0].copy()
-        if len(df_preceding) == 0:
-            df_preceding = df.copy()
+        # Filter for preceding vehicle using track_id from file
+        tracked_track_id = get_tracked_vehicle_track_id()
+        
+        if 'track_id' in df.columns and tracked_track_id is not None:
+            # Use the track_id from the file
+            track_data = df[df['track_id'] == tracked_track_id]
+            if len(track_data) > 0:
+                df_preceding = track_data.copy()
+            else:
+                print(f"  Warning: track_id={tracked_track_id} not found in data, using all data")
+                df_preceding = df.copy()
+        elif 'track_id' in df.columns:
+            # track_id file not found, fallback to most common track_id
+            track_ids = df['track_id'].mode()
+            if len(track_ids) > 0:
+                df_preceding = df[df['track_id'] == track_ids[0]].copy()
+            else:
+                df_preceding = df.copy()
+        else:
+            df_preceding = df[df['curr_box_id'] == 0].copy()
+            if len(df_preceding) == 0:
+                df_preceding = df.copy()
         
         plt.subplot(2, 2, 1)
         for method in method_order:

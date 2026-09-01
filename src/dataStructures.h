@@ -1,3 +1,7 @@
+/**
+ * @file dataStructures.h
+ * @brief Data structures for sensor fusion and TTC computation
+ */
 
 #ifndef dataStructures_h
 #define dataStructures_h
@@ -6,36 +10,77 @@
 #include <map>
 #include <opencv2/core.hpp>
 
-struct LidarPoint { // single lidar point in space
-    double x,y,z,r; // x,y,z in [m], r is point reflectivity
+/**
+ * @struct LidarPoint
+ * @brief Represents a single LIDAR point in 3D space
+ * 
+ * Contains the 3D coordinates and reflectivity of a LIDAR point.
+ */
+struct LidarPoint { 
+    /** @brief X coordinate in meters */
+    double x; 
+    /** @brief Y coordinate in meters */
+    double y; 
+    /** @brief Z coordinate in meters */
+    double z; 
+    /** @brief Point reflectivity value */
+    double r; 
 };
 
-struct BoundingBox { // bounding box around a classified object (contains both 2D and 3D data)
+/**
+ * @struct BoundingBox
+ * @brief Bounding box around a classified object containing both 2D and 3D data
+ * 
+ * Represents a detected object with its 2D image ROI, 3D LIDAR points,
+ * keypoints, and tracking information.
+ */
+struct BoundingBox { 
+    /** @brief Unique identifier for this bounding box */
+    int boxID; 
+    /** @brief Unique identifier for the track to which this bounding box belongs */
+    int trackID; 
+    /** @brief Age of the track in frames (0 = new track) */
+    int trackAge; 
     
-    int boxID; // unique identifier for this bounding box
-    int trackID; // unique identifier for the track to which this bounding box belongs
-    int trackAge; // age of the track in frames (0 = new track)
-    
-    cv::Rect roi; // 2D region-of-interest in image coordinates
-    int classID; // ID based on class file provided to YOLO framework
-    double confidence; // classification trust
+    /** @brief 2D region-of-interest in image coordinates */
+    cv::Rect roi; 
+    /** @brief Class ID based on class file provided to YOLO framework */
+    int classID; 
+    /** @brief Classification confidence/trust score */
+    double confidence; 
 
-    std::vector<LidarPoint> lidarPoints; // Lidar 3D points which project into 2D image roi
-    std::vector<cv::KeyPoint> keypoints; // keypoints enclosed by 2D roi
-    std::vector<cv::DMatch> kptMatches; // keypoint matches enclosed by 2D roi
+    /** @brief LIDAR 3D points which project into 2D image ROI */
+    std::vector<LidarPoint> lidarPoints; 
+    /** @brief Keypoints enclosed by 2D ROI */
+    std::vector<cv::KeyPoint> keypoints; 
+    /** @brief Keypoint matches enclosed by 2D ROI */
+    std::vector<cv::DMatch> kptMatches; 
 };
 
-struct DataFrame { // represents the available sensor information at the same time instance
+/**
+ * @struct DataFrame
+ * @brief Represents the available sensor information at the same time instance
+ * 
+ * Contains all sensor data for a single frame including camera image,
+ * keypoints, LIDAR points, bounding boxes, and matches.
+ */
+struct DataFrame { 
+    /** @brief Camera image for this frame */
+    cv::Mat cameraImg; 
     
-    cv::Mat cameraImg; // camera image
-    
-    std::vector<cv::KeyPoint> keypoints; // 2D keypoints within camera image
-    cv::Mat descriptors; // keypoint descriptors
-    std::vector<cv::DMatch> kptMatches; // keypoint matches between previous and current frame
+    /** @brief 2D keypoints within camera image */
+    std::vector<cv::KeyPoint> keypoints; 
+    /** @brief Keypoint descriptors */
+    cv::Mat descriptors; 
+    /** @brief Keypoint matches between previous and current frame */
+    std::vector<cv::DMatch> kptMatches; 
+    /** @brief LIDAR points for this frame */
     std::vector<LidarPoint> lidarPoints;
 
-    std::vector<BoundingBox> boundingBoxes; // ROI around detected objects in 2D image coordinates
-    std::map<int,int> bbMatches; // bounding box matches between previous and current frame
+    /** @brief ROI around detected objects in 2D image coordinates */
+    std::vector<BoundingBox> boundingBoxes; 
+    /** @brief Bounding box matches between previous and current frame */
+    std::map<int,int> bbMatches; 
 };
 
 #endif /* dataStructures_h */

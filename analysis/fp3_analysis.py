@@ -14,6 +14,32 @@ import numpy as np
 import os
 
 
+def get_tracked_vehicle_track_id(track_id_file=None):
+    """
+    Read the tracked preceding vehicle track_id from file.
+    
+    Args:
+        track_id_file: Path to the file containing the track_id (default: output/tracked_preceding_vehicle_track_id.txt)
+    
+    Returns:
+        The track_id as an integer, or None if not found
+    """
+    if track_id_file is None:
+        track_id_file = "output/tracked_preceding_vehicle_track_id.txt"
+    
+    if os.path.exists(track_id_file):
+        try:
+            with open(track_id_file, 'r') as f:
+                track_id = int(f.read().strip())
+                return track_id
+        except (ValueError, IOError) as e:
+            print(f"Warning: Could not read track_id from {track_id_file}: {e}")
+            return None
+    else:
+        print(f"Warning: track_id file not found at {track_id_file}")
+        return None
+
+
 def load_data(csv_path):
     """Load keypoint match filtering data from CSV."""
     df = pd.read_csv(csv_path)
@@ -26,16 +52,37 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     # Create output directory if needed
     os.makedirs("output", exist_ok=True)
     
-    # Filter for preceding vehicle (typically boxID 1 in KITTI sequence)
-    df_preceding = df[df['box_id'] == 1].copy()
+    # Filter for preceding vehicle using track_id from file
+    tracked_track_id = get_tracked_vehicle_track_id()
     
-    if len(df_preceding) == 0:
-        # Try boxID 0
-        df_preceding = df[df['box_id'] == 0].copy()
-    if len(df_preceding) == 0:
-        # Use all data
-        df_preceding = df.copy()
-        print("Warning: No data for specific box ID, using all data")
+    if 'track_id' in df.columns and tracked_track_id is not None:
+        # Use the track_id from the file
+        track_data = df[df['track_id'] == tracked_track_id]
+        if len(track_data) > 0:
+            df_preceding = track_data.copy()
+            print(f"  Using track_id={tracked_track_id} (from tracked_preceding_vehicle_track_id.txt) for analysis")
+        else:
+            print(f"  Warning: track_id={tracked_track_id} not found in data, using all data")
+            df_preceding = df.copy()
+    elif 'track_id' in df.columns:
+        # track_id file not found, fallback to most common track_id
+        track_ids = df['track_id'].mode()
+        if len(track_ids) > 0:
+            tracked_track_id = track_ids[0]
+            df_preceding = df[df['track_id'] == tracked_track_id].copy()
+            print(f"  Warning: track_id file not found, using most common track_id={tracked_track_id}")
+        else:
+            df_preceding = df.copy()
+            print("  Warning: No track_id data found, using all data")
+    else:
+        # Fallback: try boxID 1 then 0 (legacy behavior)
+        print("  Warning: No track_id column found, falling back to box_id filtering")
+        df_preceding = df[df['box_id'] == 1].copy()
+        if len(df_preceding) == 0:
+            df_preceding = df[df['box_id'] == 0].copy()
+        if len(df_preceding) == 0:
+            df_preceding = df.copy()
+            print("  Warning: No data for specific box ID, using all data")
     
     # Create figure
     plt.figure(figsize=(16, 12))
@@ -73,6 +120,9 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     plt.ylabel('Mean Distance (pixels)')
     plt.grid(True, alpha=0.3)
     plt.xticks(rotation=45)
+    # Set integer ticks on x-axis
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     
     # Plot 4: Distance statistics over time
     plt.subplot(2, 2, 4)
@@ -87,6 +137,9 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     plt.ylabel('Distance (pixels)')
     plt.grid(True, alpha=0.3)
     plt.legend(loc='best')
+    # Set integer ticks on x-axis
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     
     plt.tight_layout()
     

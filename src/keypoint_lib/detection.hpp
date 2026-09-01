@@ -1,3 +1,10 @@
+/**
+ * @file detection.hpp
+ * @brief Keypoint detection functions
+ *
+ * Modern implementations of various keypoint detectors.
+ */
+
 #ifndef detection_hpp
 #define detection_hpp
 

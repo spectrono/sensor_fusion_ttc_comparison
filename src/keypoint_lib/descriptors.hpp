@@ -1,3 +1,10 @@
+/**
+ * @file descriptors.hpp
+ * @brief Keypoint descriptor extraction functions
+ *
+ * Modern implementations of various keypoint descriptors.
+ */
+
 #ifndef descriptors_hpp
 #define descriptors_hpp
 

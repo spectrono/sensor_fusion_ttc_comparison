@@ -1,3 +1,10 @@
+/**
+ * @file matching.hpp
+ * @brief Keypoint matching functions
+ *
+ * Modern implementations of various keypoint matchers.
+ */
+
 #ifndef matching_hpp
 #define matching_hpp
 

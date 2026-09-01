@@ -1,3 +1,7 @@
+/**
+ * @file objectDetection2D.hpp
+ * @brief Object detection functions using YOLOv7-tiny ONNX model
+ */
 
 #ifndef objectDetection2D_hpp
 #define objectDetection2D_hpp
@@ -97,7 +101,16 @@ void detectObjects(
     const bool bVis = true,
     const int trackedPrecedingVehicleTrackID = -1);
 
-// Helper function to visualize bounding boxes with tracking colors
+/**
+ * @brief Visualizes bounding boxes with tracking colors on an image
+ * 
+ * Draws bounding boxes with class labels. The tracked preceding vehicle is highlighted.
+ * 
+ * @param img Input image to draw on
+ * @param bBoxes Vector of bounding boxes to visualize
+ * @param class_names Vector of class names for labeling
+ * @param trackedPrecedingVehicleTrackID Track ID of the preceding vehicle to highlight
+ */
 void visualizeBoundingBoxes(
     cv::Mat& img,
     std::vector<BoundingBox>& bBoxes,

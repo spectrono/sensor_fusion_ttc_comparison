@@ -1,3 +1,10 @@
+/**
+ * @file analysis.hpp
+ * @brief Keypoint analysis and utility functions
+ *
+ * Helper functions for keypoint analysis and performance evaluation.
+ */
+
 #ifndef analysis_hpp
 #define analysis_hpp
 
