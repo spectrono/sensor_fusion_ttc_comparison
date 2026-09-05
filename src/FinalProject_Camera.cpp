@@ -58,6 +58,28 @@ int main(int argc, const char *argv[])
 {
     /* INIT VARIABLES AND DATA STRUCTURES */
 
+    // CLI argument: bWait (1 = wait for keypress between frames, 0 = no waiting)
+    // Default: 0 (no waiting), useful for automated/headless runs.
+    bool bWait = false;
+    if (argc > 1)
+    {
+        std::string arg = argv[1];
+        if (arg == "1" || arg == "true" || arg == "yes")
+        {
+            bWait = true;
+        }
+        else if (arg == "0" || arg == "false" || arg == "no")
+        {
+            bWait = false;
+        }
+        else
+        {
+            std::cerr << "Invalid argument '" << arg
+                      << "'. Expected 0/1, true/false, or yes/no. Defaulting to 0 (no wait)."
+                      << std::endl;
+        }
+    }
+
     // data location
     string dataPath = "../";
 
@@ -98,12 +120,25 @@ int main(int argc, const char *argv[])
     };
     std::vector<BBMatchData> bbMatchResults;
     
+    // For FP.3/FP.4 filtering progression analysis: store match counts at each stage
+    struct FilteringProgressionData {
+        int frameIndex;
+        int trackId;
+        int boxId;
+        int fp1Count;      // Raw matches (only bounding box filtering)
+        int fp3Count;      // After displacement filtering (FP.3)
+        int fp4Count;      // Matches used for camera TTC (FP.4)
+        double displacementThreshold;  // Threshold used for displacement filtering
+    };
+    std::vector<FilteringProgressionData> filteringProgressionResults;
+    bool bRecordFilteringProgression = true; // Enable filtering progression CSV export
+    
     // Current detector and descriptor types for CSV export
     std::string currentDetectorType = "SHITOMASI";
     std::string currentDescriptorType = "ORB";
 
     // FP.2: TTC method selection
-    TTCMethod ttcLidarMethod = TTCMethod::PERCENTILE_MEDIAN; // Default method
+    TTCMethod ttcLidarMethod = TTCMethod::UNFILTERED; // Default method
     bool bTestAllTTCMethods = true; // Enable comparison mode for FP.2 analysis
     
     // For storing TTC results from different methods
@@ -129,6 +164,13 @@ int main(int argc, const char *argv[])
         double meanDistance;
         double medianDistance;
         double stddevDistance;
+        double minDistance;
+        double maxDistance;
+        // Unfiltered statistics (FP.1 - before displacement filtering)
+        double meanDistanceUnfiltered;
+        double medianDistanceUnfiltered;
+        double minDistanceUnfiltered;
+        double maxDistanceUnfiltered;
     };
     std::vector<KptMatchStats> kptMatchStats;
     bool bRecordKptStats = true; // Enable to record FP.3 statistics
@@ -218,6 +260,7 @@ int main(int argc, const char *argv[])
     int dataBufferSize = 2;       // no. of images which are held in memory (ring buffer) at the same time
     vector<DataFrame> dataBuffer; // list of data frames which are held in memory at the same time
     bool bVis = true;             // visualize results
+    bool bShowKeypointMatches = true; // Enable keypoint match visualization on tracked bounding box (set to true to generate keypoint_matches_*.png files)
     
     // For tracking objects across frames
     // trackedPrecedingVehicleTrackID is the main identifier: >= 0 means preceding vehicle is tracked
@@ -313,14 +356,26 @@ int main(int argc, const char *argv[])
                 ? findTrackIDForGivenBoxID((dataBuffer.end() - 1)->boundingBoxes, trackedPrecedingVehicleBoxID)
                 : -1;
             
-            // Visualize bounding boxes for frame 0
-            if (bVis)
+            // Visualize and save all bounding boxes for frame 0 for FP.1 documentation
+            if (dataBuffer.size() == 1)  // Only for first frame
             {
-                visualizeBoundingBoxes(
+                // Save visualization of all bounding boxes for documentation
+                showAllBoundingBoxes(
                     (dataBuffer.end() - 1)->cameraImg,
                     (dataBuffer.end() - 1)->boundingBoxes,
-                    class_names,
-                    trackedPrecedingVehicleTrackID);
+                    imgStartIndex + imgIndex,
+                    dataPath + "analysis/output/",
+                    false);  // Don't display, just save
+                
+                // Also call the original visualization if enabled
+                if (bVis)
+                {
+                    visualizeBoundingBoxes(
+                        (dataBuffer.end() - 1)->cameraImg,
+                        (dataBuffer.end() - 1)->boundingBoxes,
+                        class_names,
+                        trackedPrecedingVehicleTrackID);
+                }
             }
         }
 
@@ -336,7 +391,7 @@ int main(int argc, const char *argv[])
         // Visualize 3D objects for first frame
         if (dataBuffer.size() == 1 && bVis)
         {
-            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true, trackedPrecedingVehicleTrackID);
+            show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), bWait, trackedPrecedingVehicleTrackID, imgStartIndex + imgIndex, dataPath + "analysis/output/");
         }
 
         cout << "#4 : CLUSTER LIDAR POINT CLOUD done" << endl;
@@ -557,6 +612,10 @@ int main(int argc, const char *argv[])
                 int boxID = std::get<0>(stat);
                 boxStatsMap[boxID] = stat;
             }
+            
+            // Note: bbMatchResults contains raw match counts (FP.1 - only bounding box filtering)
+            // FP.3 applies additional distance filtering via clusterAllKptMatchesWithROI
+            // The overlay uses getKptMatchesForBBPair + filterMatchesByDistance for consistency
 
             // Assign track IDs and find the tracked preceding vehicle
             // trackedPrecedingVehicleTrackID >= 0 indicates the preceding vehicle is tracked
@@ -585,7 +644,7 @@ int main(int argc, const char *argv[])
             // Visualize 3D objects with tracking for subsequent frames
             if (bVis)
             {
-                show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), true, trackedPrecedingVehicleTrackID);
+                show3DObjects((dataBuffer.end()-1)->boundingBoxes, cv::Size(4.0, 20.0), cv::Size(2000, 2000), bWait, trackedPrecedingVehicleTrackID, imgStartIndex + imgIndex, dataPath + "analysis/output/");
             }
 
             // Find the bounding boxes for the preceding vehicle using the cached boxID
@@ -672,57 +731,7 @@ int main(int argc, const char *argv[])
                     double ttcCamera;
                     
                     // For FP.3: Get cluster statistics for this box
-                    int matchesBefore = 0, matchesAfter = 0;
-                    if (boxStatsMap.find(currBB->boxID) != boxStatsMap.end())
-                    {
-                        matchesBefore = std::get<1>(boxStatsMap[currBB->boxID]);
-                        matchesAfter = std::get<2>(boxStatsMap[currBB->boxID]);
-                    }
-                    else
-                    {
-                        matchesAfter = static_cast<int>(currBB->kptMatches.size());
-                    }
-                    
-                    // Record FP.3 statistics if enabled
-                    if (bRecordKptStats && matchesAfter > 0)
-                    {
-                        KptMatchStats stats;
-                        stats.frameIndex = imgStartIndex + imgIndex;
-                        stats.trackId = currBB->trackID;  // Track ID for filtering
-                        stats.boxId = currBB->boxID;
-                        stats.matchesBefore = matchesBefore;
-                        stats.matchesAfter = matchesAfter;
-                        stats.outliersRemovedPct = (matchesBefore > 0) ? (100.0 * (matchesBefore - matchesAfter) / matchesBefore) : 0.0;
-                        
-                        // Calculate distance statistics
-                        std::vector<double> distances;
-                        for (const auto &match : currBB->kptMatches)
-                        {
-                            const cv::KeyPoint &prevKp = (dataBuffer.end() - 2)->keypoints[match.queryIdx];
-                            const cv::KeyPoint &currKp = (dataBuffer.end() - 1)->keypoints[match.trainIdx];
-                            double dist = cv::norm(prevKp.pt - currKp.pt);
-                            distances.push_back(dist);
-                        }
-                        
-                        if (!distances.empty())
-                        {
-                            stats.meanDistance = std::accumulate(distances.begin(), distances.end(), 0.0) / distances.size();
-                            std::sort(distances.begin(), distances.end());
-                            stats.medianDistance = distances[distances.size() / 2];
-                            double sq_sum = std::inner_product(distances.begin(), distances.end(), distances.begin(), 0.0);
-                            stats.stddevDistance = std::sqrt(sq_sum / distances.size() - stats.meanDistance * stats.meanDistance);
-                        }
-                        else
-                        {
-                            stats.meanDistance = 0.0;
-                            stats.medianDistance = 0.0;
-                            stats.stddevDistance = 0.0;
-                        }
-                        
-                        kptMatchStats.push_back(stats);
-                    }
-                    
-                    // For FP.4: Get keypoint matches for the matched bounding box pair
+                    // For FP.3/FP.4: Get keypoint matches for the matched bounding box pair
                     // We need matches where prev keypoint is in prevBB AND curr keypoint is in currBB
                     std::vector<cv::DMatch> pairedMatches = getKptMatchesForBBPair(
                         *prevBB, *currBB,
@@ -730,10 +739,90 @@ int main(int argc, const char *argv[])
                         (dataBuffer.end() - 1)->keypoints,
                         (dataBuffer.end() - 1)->kptMatches);
                     
-                    // Apply the same filtering as FP.3 for consistency
-                    pairedMatches = filterMatchesByDistance(pairedMatches,
+                    // For FP.3/FP.4: Apply displacement filtering
+                    // Uses upper threshold based on bounding box size to remove large displacements
+                    std::vector<cv::DMatch> pairedMatchesFiltered = filterMatchesByDisplacement(pairedMatches,
                         (dataBuffer.end() - 2)->keypoints,
-                        (dataBuffer.end() - 1)->keypoints);
+                        (dataBuffer.end() - 1)->keypoints,
+                        currBB, -1.0);  // Use current bounding box for threshold, -1.0 for default
+                    
+                    // For FP.3 statistics: use matches with hard constraint (both keypoints in their boxes)
+                    int fp1Count = static_cast<int>(pairedMatches.size());
+                    int matchesAfter = static_cast<int>(pairedMatchesFiltered.size());
+                    
+                    // Record FP.3 statistics if enabled
+                    if (bRecordKptStats && matchesAfter > 0)
+                    {
+                        // Calculate distance statistics for FILTERED matches (FP.3)
+                        std::vector<double> distancesFiltered;
+                        for (const auto &match : pairedMatchesFiltered)
+                        {
+                            const cv::KeyPoint &prevKp = (dataBuffer.end() - 2)->keypoints[match.queryIdx];
+                            const cv::KeyPoint &currKp = (dataBuffer.end() - 1)->keypoints[match.trainIdx];
+                            double dist = cv::norm(prevKp.pt - currKp.pt);
+                            distancesFiltered.push_back(dist);
+                        }
+                        
+                        // Calculate distance statistics for UNFILTERED matches (FP.1)
+                        std::vector<double> distancesUnfiltered;
+                        for (const auto &match : pairedMatches)
+                        {
+                            const cv::KeyPoint &prevKp = (dataBuffer.end() - 2)->keypoints[match.queryIdx];
+                            const cv::KeyPoint &currKp = (dataBuffer.end() - 1)->keypoints[match.trainIdx];
+                            double dist = cv::norm(prevKp.pt - currKp.pt);
+                            distancesUnfiltered.push_back(dist);
+                        }
+                        
+                        KptMatchStats stats;
+                        stats.frameIndex = imgStartIndex + imgIndex;
+                        stats.trackId = currBB->trackID;  // Track ID for filtering
+                        stats.boxId = currBB->boxID;
+                        stats.matchesBefore = fp1Count;  // FP.1: matches with hard constraint
+                        stats.matchesAfter = matchesAfter;
+                        stats.outliersRemovedPct = (fp1Count > 0) ? (100.0 * (fp1Count - matchesAfter) / fp1Count) : 0.0;
+                        
+                        // Filtered statistics (FP.3)
+                        if (!distancesFiltered.empty())
+                        {
+                            stats.meanDistance = std::accumulate(distancesFiltered.begin(), distancesFiltered.end(), 0.0) / distancesFiltered.size();
+                            std::sort(distancesFiltered.begin(), distancesFiltered.end());
+                            stats.medianDistance = distancesFiltered[distancesFiltered.size() / 2];
+                            double sq_sum = std::inner_product(distancesFiltered.begin(), distancesFiltered.end(), distancesFiltered.begin(), 0.0);
+                            stats.stddevDistance = std::sqrt(sq_sum / distancesFiltered.size() - stats.meanDistance * stats.meanDistance);
+                            stats.minDistance = distancesFiltered.front();
+                            stats.maxDistance = distancesFiltered.back();
+                        }
+                        else
+                        {
+                            stats.meanDistance = 0.0;
+                            stats.medianDistance = 0.0;
+                            stats.stddevDistance = 0.0;
+                            stats.minDistance = 0.0;
+                            stats.maxDistance = 0.0;
+                        }
+                        
+                        // Unfiltered statistics (FP.1)
+                        if (!distancesUnfiltered.empty())
+                        {
+                            stats.meanDistanceUnfiltered = std::accumulate(distancesUnfiltered.begin(), distancesUnfiltered.end(), 0.0) / distancesUnfiltered.size();
+                            std::sort(distancesUnfiltered.begin(), distancesUnfiltered.end());
+                            stats.medianDistanceUnfiltered = distancesUnfiltered[distancesUnfiltered.size() / 2];
+                            stats.minDistanceUnfiltered = distancesUnfiltered.front();
+                            stats.maxDistanceUnfiltered = distancesUnfiltered.back();
+                        }
+                        else
+                        {
+                            stats.meanDistanceUnfiltered = 0.0;
+                            stats.medianDistanceUnfiltered = 0.0;
+                            stats.minDistanceUnfiltered = 0.0;
+                            stats.maxDistanceUnfiltered = 0.0;
+                        }
+                        
+                        kptMatchStats.push_back(stats);
+                    }
+                    
+                    // Use filtered matches for camera TTC computation
+                    pairedMatches = pairedMatchesFiltered;
                     
                     // Compute distance ratios for debugging/analysis
                     std::vector<double> distRatios;
@@ -807,6 +896,45 @@ int main(int argc, const char *argv[])
                         
                         cameraTTCScaleStats.push_back(stats);
                     }
+                    
+                    // Record filtering progression data for FP.1, FP.3, FP.4 comparison
+                    if (bRecordFilteringProgression && prevBB != nullptr && currBB != nullptr)
+                    {
+                        // Get FP.1 count (raw matches with hard constraint - both keypoints in their respective boxes)
+                        // Use getKptMatchesForBBPair to ensure consistency with FP.3 counting
+                        std::vector<cv::DMatch> fp1Matches = getKptMatchesForBBPair(
+                            *prevBB, *currBB,
+                            (dataBuffer.end() - 2)->keypoints,
+                            (dataBuffer.end() - 1)->keypoints,
+                            (dataBuffer.end() - 1)->kptMatches);
+                        int fp1Count = static_cast<int>(fp1Matches.size());
+                        
+                        // Get FP.3 count (after displacement filtering)
+                        int fp3Count = static_cast<int>(pairedMatchesFiltered.size());
+                        
+                        // Get FP.4 count (same as FP.3, these are used for camera TTC)
+                        int fp4Count = static_cast<int>(pairedMatchesFiltered.size());
+                        
+                        // Get displacement threshold used
+                        double threshold = 0.0;
+                        if (currBB != nullptr)
+                        {
+                            int longestDim = std::max(currBB->roi.width, currBB->roi.height);
+                            threshold = longestDim / 8.0;
+                        }
+                        
+                        FilteringProgressionData progData;
+                        progData.frameIndex = imgStartIndex + imgIndex;
+                        progData.trackId = trackedPrecedingVehicleTrackID;
+                        progData.boxId = currBB->boxID;
+                        progData.fp1Count = fp1Count;
+                        progData.fp3Count = fp3Count;
+                        progData.fp4Count = fp4Count;
+                        progData.displacementThreshold = threshold;
+                        
+                        filteringProgressionResults.push_back(progData);
+                    }
+                    
                     //// EOF STUDENT ASSIGNMENT
 
                     bVis = false;  // Disable visualization for automated runs
@@ -824,6 +952,21 @@ int main(int argc, const char *argv[])
                         cv::imshow(windowName, visImg);
                         cout << "Press key to continue to next frame" << endl;
                         cv::waitKey(10);  // Short wait for visualization
+                    }
+                    
+                    // Visualize keypoint matches on tracked bounding box if enabled
+                    if (bShowKeypointMatches && imgIndex + imgStartIndex > 0 && prevBB != nullptr) // Need previous frame data and matched BB
+                    {
+                        // Use pairedMatches which have the hard constraint: prev keypoint in prevBB AND curr keypoint in currBB
+                        showKeypointMatchesOverlay(
+                            (dataBuffer.end() - 1)->cameraImg,
+                            (dataBuffer.end() - 2)->keypoints,
+                            (dataBuffer.end() - 1)->keypoints,
+                            pairedMatches, // Use properly filtered matches with hard constraints
+                            *currBB,
+                            imgStartIndex + imgIndex,
+                            dataPath + "analysis/output/",
+                            true);
                     }
 
                 } // eof TTC computation for tracked preceding vehicle            
@@ -969,7 +1112,9 @@ int main(int argc, const char *argv[])
         if (csvFile.is_open())
         {
             // Write CSV header
-            csvFile << "frame_index,track_id,box_id,matches_before,matches_after,outliers_removed_pct,mean_distance,median_distance,stddev_distance\n";
+            csvFile << "frame_index,track_id,box_id,matches_before,matches_after,outliers_removed_pct,"
+                       "mean_distance,median_distance,min_distance,max_distance,"
+                       "mean_distance_unfiltered,median_distance_unfiltered,min_distance_unfiltered,max_distance_unfiltered\n";
             
             // Write data rows
             for (const auto& stats : kptMatchStats)
@@ -983,7 +1128,12 @@ int main(int argc, const char *argv[])
                         << stats.outliersRemovedPct << ","
                         << stats.meanDistance << ","
                         << stats.medianDistance << ","
-                        << stats.stddevDistance << "\n";
+                        << stats.minDistance << ","
+                        << stats.maxDistance << ","
+                        << stats.meanDistanceUnfiltered << ","
+                        << stats.medianDistanceUnfiltered << ","
+                        << stats.minDistanceUnfiltered << ","
+                        << stats.maxDistanceUnfiltered << "\n";
             }
             
             csvFile.close();
@@ -1069,6 +1219,40 @@ int main(int argc, const char *argv[])
             csvFile.close();
             std::cout << "\nFP.4 Camera TTC scale statistics saved to " << csvFilename << std::endl;
             std::cout << "Total scale stat records: " << cameraTTCScaleStats.size() << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Save FP.3/FP.4 filtering progression data to CSV for analysis
+    if (bRecordFilteringProgression && !filteringProgressionResults.empty())
+    {
+        std::string csvFilename = dataPath + "analysis/output/filtering_progression.csv";
+        std::ofstream csvFile(csvFilename);
+        
+        if (csvFile.is_open())
+        {
+            // Write CSV header
+            csvFile << "frame_index,track_id,box_id,fp1_raw_count,fp3_displacement_filtered_count,fp4_camera_ttc_count,displacement_threshold\n";
+            
+            // Write data rows
+            for (const auto& data : filteringProgressionResults)
+            {
+                csvFile << data.frameIndex << ","
+                        << data.trackId << ","
+                        << data.boxId << ","
+                        << data.fp1Count << ","
+                        << data.fp3Count << ","
+                        << data.fp4Count << ","
+                        << std::fixed << std::setprecision(2)
+                        << data.displacementThreshold << "\n";
+            }
+            
+            csvFile.close();
+            std::cout << "\nFP.3/FP.4 Filtering progression data saved to " << csvFilename << std::endl;
+            std::cout << "Total progression records: " << filteringProgressionResults.size() << std::endl;
         }
         else
         {

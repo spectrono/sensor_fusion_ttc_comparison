@@ -142,9 +142,9 @@ def plot_ttc_comparison(df, output_prefix="fp2_ttc"):
     plt.ylabel('TTC (seconds)')
     plt.grid(True, alpha=0.3)
     
-    # Plot 4: Method differences relative to percentile_median
+    # Plot 4: Method differences relative to unfiltered
     plt.subplot(2, 2, 4)
-    baseline = 'percentile_median'
+    baseline = 'unfiltered'
     df_diff = df_preceding[['frame_index']].copy()
     for method in method_order:
         if method != baseline:
@@ -165,7 +165,7 @@ def plot_ttc_comparison(df, output_prefix="fp2_ttc"):
                     hue='method', style='method', markers=True,
                     palette=method_colors, dashes=False)
         plt.axhline(0, color='black', linestyle='--', alpha=0.5)
-        plt.title(f'TTC Difference from {baseline}')
+        plt.title(f'TTC Difference from {baseline} (reference)')
         plt.xlabel('Frame Index')
         plt.ylabel('TTC Difference (seconds)')
         plt.grid(True, alpha=0.3)
@@ -176,7 +176,7 @@ def plot_ttc_comparison(df, output_prefix="fp2_ttc"):
     plt.tight_layout()
     
     # Save plots
-    output_path = f"output/{output_prefix}_comparison.png"
+    output_path = f"../analysis/output/{output_prefix}_comparison.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved comparison plot to {output_path}")

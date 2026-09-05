@@ -43,26 +43,6 @@ void clusterLidarWithROI(std::vector<BoundingBox> &boundingBoxes, std::vector<Li
 double computeMedian(std::vector<double> values);
 
 /**
- * @brief Filters out background keypoint matches based on distance ratio clustering
- * 
- * Background matches have distance ratios near 1.0 (no scale change).
- * Handles three modes: > 1 (approaching), < 1 (moving away), == 1 (background).
- * Returns filtered distance ratios using only foreground matches.
- * 
- * @param distRatios Vector of distance ratios to filter
- * @param thresholdMultiplier Multiplier for median deviation (default: 0.2, higher = more aggressive)
- * @param bgMinRatio Minimum background ratio for cluster detection (default: 0.2)
- * @param bgMaxRatio Maximum background ratio for cluster detection (default: 0.6)
- * @param maxDevMultiplier Multiplier for bgThreshold in max deviation check (default: 3.0)
- * @return Filtered vector of distance ratios
- */
-std::vector<double> filterBackgroundCluster(const std::vector<double>& distRatios,
-                                             double thresholdMultiplier = 0.2,
-                                             double bgMinRatio = 0.2,
-                                             double bgMaxRatio = 0.6,
-                                             double maxDevMultiplier = 3.0);
-
-/**
  * @brief Filters matches by Euclidean distance percentile
  * @param matches Vector of keypoint matches to filter
  * @param kptsPrev Keypoints from previous frame
@@ -73,6 +53,22 @@ std::vector<cv::DMatch> filterMatchesByDistance(
     const std::vector<cv::DMatch> &matches,
     const std::vector<cv::KeyPoint> &kptsPrev,
     const std::vector<cv::KeyPoint> &kptsCurr);
+
+/**
+ * @brief Filters keypoint matches by maximum displacement threshold
+ * @param matches Vector of keypoint matches to filter
+ * @param kptsPrev Keypoints from previous frame
+ * @param kptsCurr Keypoints from current frame
+ * @param boundingBox Optional bounding box for threshold calculation
+ * @param maxDisplacementThreshold Optional explicit threshold in pixels (overrides box-based threshold)
+ * @return Filtered vector of matches with displacement <= threshold
+ */
+std::vector<cv::DMatch> filterMatchesByDisplacement(
+    const std::vector<cv::DMatch> &matches,
+    const std::vector<cv::KeyPoint> &kptsPrev,
+    const std::vector<cv::KeyPoint> &kptsCurr,
+    const BoundingBox *boundingBox = nullptr,
+    double maxDisplacementThreshold = -1.0);
 
 /**
  * @brief Associates keypoint matches with a single bounding box
@@ -122,7 +118,7 @@ void matchBoundingBoxes(std::vector<cv::DMatch> &matches, std::map<int, int> &bb
  * @param kptsCurr Keypoints from current frame
  * @return Tuple of statistics
  */
-std::tuple<int, int, double, double, double, double> 
+std::tuple<int, int, double, double, double, double, double, double> 
 computeKptMatchStats(const std::vector<cv::DMatch> &matchesBefore,
                      const std::vector<cv::DMatch> &matchesAfter,
                      const std::vector<cv::KeyPoint> &kptsPrev,
@@ -236,7 +232,7 @@ void printBBMatchInfo(const std::map<int, int> &bbBestMatches, const DataFrame &
  * @param bWait Whether to wait for key press before continuing
  * @param trackedPrecedingVehicleTrackID Track ID of the preceding vehicle to highlight
  */
-void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait=true, int trackedPrecedingVehicleTrackID = -1);
+void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait, int trackedPrecedingVehicleTrackID, int frameIndex = -1, const std::string &dataPath = "");
 
 /**
  * @brief Computes Time-to-Collision (TTC) based on camera keypoint correspondences
@@ -286,5 +282,50 @@ std::vector<double> filterPercentiles(
     const std::vector<double>& values, 
     double lowerPercentile,
     double upperPercentile);
+
+/**
+ * @brief Visualizes keypoint matches on bounding boxes and optionally saves to file
+ * 
+ * Draws matched keypoints between previous and current frames on the camera image,
+ * highlighting keypoints within the tracked bounding box. Useful for FP.5 analysis.
+ * 
+ * @param img Current camera image
+ * @param kptsPrev Keypoints from previous frame
+ * @param kptsCurr Keypoints from current frame
+ * @param kptMatches Keypoint matches between frames
+ * @param trackedBoundingBox Bounding box of the tracked vehicle
+ * @param frameIndex Current frame index for file naming
+ * @param dataPath Path to save output images (empty to disable saving)
+ * @param bVis Enable visualization display
+ */
+void showKeypointMatchesOverlay(
+    cv::Mat &img, 
+    std::vector<cv::KeyPoint> &kptsPrev, 
+    std::vector<cv::KeyPoint> &kptsCurr, 
+    std::vector<cv::DMatch> &kptMatches,
+    BoundingBox &trackedBoundingBox,
+    int frameIndex = -1,
+    const std::string &dataPath = "",
+    bool bVis = true);
+
+/**
+ * @brief Visualizes all bounding boxes on the camera image
+ * 
+ * Draws all detected bounding boxes on the camera image for documentation purposes.
+ * Each bounding box is drawn with a unique color and labeled with its boxID.
+ * Useful for showing the results of object detection in FP.1.
+ * 
+ * @param img Camera image
+ * @param boundingBoxes Vector of all bounding boxes to visualize
+ * @param frameIndex Current frame index for file naming
+ * @param dataPath Path to save output images
+ * @param bVis Enable visualization display
+ */
+void showAllBoundingBoxes(
+    cv::Mat &img,
+    std::vector<BoundingBox> &boundingBoxes,
+    int frameIndex,
+    const std::string &dataPath,
+    bool bVis = true);
 
 #endif /* camFusion_hpp */

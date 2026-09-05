@@ -8,14 +8,26 @@ set(CMAKE_CXX_FLAGS, "${CXX_FLAGS}")
 project(camera_fusion)
 
 # On macOS with Homebrew, OpenCV 5 installs its CMake config in /opt/homebrew/opt/opencv/lib/cmake/opencv5
-if(NOT OpenCV_DIR AND EXISTS "/opt/homebrew/opt/opencv/lib/cmake/opencv5")
-    set(OpenCV_DIR "/opt/homebrew/opt/opencv/lib/cmake/opencv5")
+if(NOT OpenCV_DIR)
+    # Try Apple Silicon path first
+    if(EXISTS "/opt/homebrew/opt/opencv/lib/cmake/opencv5")
+        set(OpenCV_DIR "/opt/homebrew/opt/opencv/lib/cmake/opencv5")
+    # Try Intel Mac path
+    elseif(EXISTS "/usr/local/opt/opencv/lib/cmake/opencv5")
+        set(OpenCV_DIR "/usr/local/opt/opencv/lib/cmake/opencv5")
+    endif()
 endif()
 find_package(OpenCV 5.0 REQUIRED COMPONENTS core highgui imgproc features xfeatures2d)
 
-# On macOS with Homebrew, yaml-cpp installs its CMake config in /opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp
-if(NOT yaml-cpp_DIR AND EXISTS "/opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp")
-    set(yaml-cpp_DIR "/opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp")
+# On macOS with Homebrew, yaml-cpp installs its CMake config
+if(NOT yaml-cpp_DIR)
+    # Try Apple Silicon path first
+    if(EXISTS "/opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp")
+        set(yaml-cpp_DIR "/opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp")
+    # Try Intel Mac path
+    elseif(EXISTS "/usr/local/opt/yaml-cpp/lib/cmake/yaml-cpp")
+        set(yaml-cpp_DIR "/usr/local/opt/yaml-cpp/lib/cmake/yaml-cpp")
+    endif()
 endif()
 find_package(yaml-cpp REQUIRED)
 

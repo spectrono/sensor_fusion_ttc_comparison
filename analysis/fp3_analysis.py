@@ -84,9 +84,9 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
             df_preceding = df.copy()
             print("  Warning: No data for specific box ID, using all data")
     
-    # Create figure
+    # Create figure with 3 subplots (removed subplot 3, split subplot 4 into two)
     plt.figure(figsize=(16, 12))
-    plt.suptitle('FP.3: Keypoint Match Filtering Analysis', fontsize=16, fontweight='bold')
+    plt.suptitle('FP.3: Keypoint Match Displacement Filtering Analysis', fontsize=16, fontweight='bold')
     
     # Plot 1: Match counts before vs after filtering
     plt.subplot(2, 2, 1)
@@ -96,7 +96,7 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     
     plt.plot(frames, before, 'o-', label='Before Filtering', color='red', linewidth=2, markersize=4)
     plt.plot(frames, after, 'o-', label='After Filtering', color='green', linewidth=2, markersize=4)
-    plt.title('Keypoint Match Counts: Before vs After Filtering')
+    plt.title('Keypoint Match Counts: Before vs After Displacement Filtering')
     plt.xlabel('Frame Index')
     plt.ylabel('Number of Matches')
     plt.grid(True, alpha=0.3)
@@ -105,46 +105,110 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     # Plot 2: Outlier removal percentage
     plt.subplot(2, 2, 2)
     plt.plot(frames, df_preceding['outliers_removed_pct'], 'o-', color='blue', linewidth=2, markersize=4)
-    plt.axhline(y=10.0, color='red', linestyle='--', alpha=0.5, label='10%')
-    plt.title('Outlier Removal Percentage')
+    plt.axhline(y=5.0, color='red', linestyle='--', alpha=0.5, label='5%')
+    plt.title('Matches Removed by Displacement Threshold')
     plt.xlabel('Frame Index')
     plt.ylabel('Percentage Removed (%)')
     plt.grid(True, alpha=0.3)
     plt.legend(loc='best')
     
-    # Plot 3: Displacement distance distribution
-    plt.subplot(2, 2, 3)
-    sns.boxplot(data=df_preceding, x='frame_index', y='mean_distance')
-    plt.title('Mean Displacement Distance by Frame')
-    plt.xlabel('Frame Index')
-    plt.ylabel('Mean Distance (pixels)')
-    plt.grid(True, alpha=0.3)
-    plt.xticks(rotation=45)
-    # Set integer ticks on x-axis
-    ax = plt.gca()
-    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    # Compute global y-axis limits for consistent scaling between subplots
+    global_y_min = 0
+    global_y_max = 100  # Default range
     
-    # Plot 4: Distance statistics over time
+    if 'mean_distance_unfiltered' in df_preceding.columns and 'min_distance_unfiltered' in df_preceding.columns:
+        mean_unfiltered = df_preceding['mean_distance_unfiltered']
+        median_unfiltered = df_preceding['median_distance_unfiltered']
+        min_unfiltered = df_preceding['min_distance_unfiltered']
+        max_unfiltered = df_preceding['max_distance_unfiltered']
+        
+        # Compute combined range
+        all_unfiltered = np.concatenate([mean_unfiltered.values, median_unfiltered.values, 
+                                         min_unfiltered.values, max_unfiltered.values])
+        global_y_min = min(global_y_min, np.min(all_unfiltered))
+        global_y_max = max(global_y_max, np.max(all_unfiltered))
+    
+    if 'mean_distance' in df_preceding.columns and 'min_distance' in df_preceding.columns:
+        mean_filtered = df_preceding['mean_distance']
+        median_filtered = df_preceding['median_distance']
+        min_filtered = df_preceding['min_distance']
+        max_filtered = df_preceding['max_distance']
+        
+        # Compute combined range
+        all_filtered = np.concatenate([mean_filtered.values, median_filtered.values, 
+                                       min_filtered.values, max_filtered.values])
+        global_y_min = min(global_y_min, np.min(all_filtered))
+        global_y_max = max(global_y_max, np.max(all_filtered))
+    
+    # Add 10% padding for better visualization
+    y_range = global_y_max - global_y_min
+    global_y_min -= y_range * 0.1
+    global_y_max += y_range * 0.1
+    
+    # Plot 3: Unfiltered distance statistics (FP.1) - without standard deviation
+    plt.subplot(2, 2, 3)
+    if 'mean_distance_unfiltered' in df_preceding.columns and 'min_distance_unfiltered' in df_preceding.columns:
+        mean_unfiltered = df_preceding['mean_distance_unfiltered']
+        median_unfiltered = df_preceding['median_distance_unfiltered']
+        min_unfiltered = df_preceding['min_distance_unfiltered']
+        max_unfiltered = df_preceding['max_distance_unfiltered']
+        
+        plt.plot(frames, mean_unfiltered, 'o-', label='Mean', color='blue', linewidth=2, markersize=4)
+        plt.plot(frames, median_unfiltered, 's-', label='Median', color='green', linewidth=2, markersize=4)
+        plt.plot(frames, min_unfiltered, ':', color='purple', linewidth=2, label='Min')
+        plt.plot(frames, max_unfiltered, ':', color='purple', linewidth=2, label='Max')
+        
+        plt.title('FP.1: Unfiltered Distance Statistics (Mean, Median, Min, Max)')
+        plt.xlabel('Frame Index')
+        plt.ylabel('Distance (pixels)')
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='best')
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+        ax.set_ylim(global_y_min, global_y_max)
+    else:
+        plt.title('FP.1: Unfiltered data not available')
+        plt.xlabel('Frame Index')
+        plt.ylabel('Distance (pixels)')
+        plt.grid(True, alpha=0.3)
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+        ax.set_ylim(global_y_min, global_y_max)
+    
+    # Plot 4: Filtered distance statistics (FP.3) - without standard deviation
     plt.subplot(2, 2, 4)
-    plt.plot(frames, df_preceding['mean_distance'], 'o-', label='Mean', color='blue', linewidth=2)
-    plt.plot(frames, df_preceding['median_distance'], 'o-', label='Median', color='green', linewidth=2)
-    plt.fill_between(frames, 
-                     df_preceding['mean_distance'] - df_preceding['stddev_distance'],
-                     df_preceding['mean_distance'] + df_preceding['stddev_distance'],
-                     alpha=0.2, color='blue')
-    plt.title('Distance Statistics Over Frames')
-    plt.xlabel('Frame Index')
-    plt.ylabel('Distance (pixels)')
-    plt.grid(True, alpha=0.3)
-    plt.legend(loc='best')
-    # Set integer ticks on x-axis
-    ax = plt.gca()
-    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    if 'mean_distance' in df_preceding.columns and 'min_distance' in df_preceding.columns:
+        mean_filtered = df_preceding['mean_distance']
+        median_filtered = df_preceding['median_distance']
+        min_filtered = df_preceding['min_distance']
+        max_filtered = df_preceding['max_distance']
+        
+        plt.plot(frames, mean_filtered, 'o-', label='Mean', color='blue', linewidth=2, markersize=4)
+        plt.plot(frames, median_filtered, 's-', label='Median', color='green', linewidth=2, markersize=4)
+        plt.plot(frames, min_filtered, ':', color='purple', linewidth=2, label='Min')
+        plt.plot(frames, max_filtered, ':', color='purple', linewidth=2, label='Max')
+        
+        plt.title('FP.3: Filtered Distance Statistics (Mean, Median, Min, Max)')
+        plt.xlabel('Frame Index')
+        plt.ylabel('Distance (pixels)')
+        plt.grid(True, alpha=0.3)
+        plt.legend(loc='best')
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+        ax.set_ylim(global_y_min, global_y_max)
+    else:
+        plt.title('FP.3: Filtered data not available')
+        plt.xlabel('Frame Index')
+        plt.ylabel('Distance (pixels)')
+        plt.grid(True, alpha=0.3)
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+        ax.set_ylim(global_y_min, global_y_max)
     
     plt.tight_layout()
     
     # Save plots
-    output_path = f"output/{output_prefix}_comparison.png"
+    output_path = f"../analysis/output/{output_prefix}_comparison.png"
     plt.savefig(output_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved comparison plot to {output_path}")
@@ -153,10 +217,10 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
 
 
 def print_statistics(df):
-    """Print summary statistics for keypoint match filtering."""
+    """Print summary statistics for keypoint match displacement filtering."""
     
     print("\n" + "="*80)
-    print("FP.3: KEYPOINT MATCH FILTERING STATISTICS")
+    print("FP.3: KEYPOINT MATCH DISPLACEMENT FILTERING STATISTICS")
     print("="*80)
     
     # Overall statistics
@@ -182,7 +246,17 @@ def print_statistics(df):
     print(f"\nDisplacement Distance Statistics:")
     print(f"  Mean distance: {df['mean_distance'].mean():.2f} pixels")
     print(f"  Median distance: {df['median_distance'].median():.2f} pixels")
-    print(f"  Mean std dev: {df['stddev_distance'].mean():.2f} pixels")
+    if 'stddev_distance' in df.columns:
+        print(f"  Mean std dev: {df['stddev_distance'].mean():.2f} pixels")
+    
+    # Unfiltered distance statistics (if available)
+    if 'mean_distance_unfiltered' in df.columns:
+        print(f"\nUnfiltered Distance Statistics:")
+        print(f"  Mean distance: {df['mean_distance_unfiltered'].mean():.2f} pixels")
+        print(f"  Median distance: {df['median_distance_unfiltered'].median():.2f} pixels")
+        if 'min_distance_unfiltered' in df.columns and 'max_distance_unfiltered' in df.columns:
+            print(f"  Min distance: {df['min_distance_unfiltered'].min():.2f} pixels")
+            print(f"  Max distance: {df['max_distance_unfiltered'].max():.2f} pixels")
     
     # Box ID statistics
     print(f"\nBox ID Distribution:")
@@ -192,12 +266,12 @@ def print_statistics(df):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='FP.3 Keypoint Match Filtering Analysis'
+        description='FP.3 Keypoint Match Displacement Filtering Analysis'
     )
     parser.add_argument('--csv', type=str, default='output/kpt_matches_filtering.csv',
-                       help='Path to keypoint match filtering CSV file (default: output/kpt_matches_filtering.csv)')
+                       help='Path to keypoint match displacement filtering CSV file (default: output/kpt_matches_filtering.csv)')
     parser.add_argument('--output', type=str, default='fp3_kpt',
-                       help='Output prefix for plots (default: fp3_kpt, saves to output/fp3_kpt_comparison.png)')
+                       help='Output prefix for plots (default: fp3_kpt, saves to output/fp3_kpt_displacement_comparison.png)')
     parser.add_argument('--show', action='store_true',
                        help='Show plots interactively')
     args = parser.parse_args()
@@ -206,7 +280,7 @@ def main():
     df = load_data(args.csv)
     
     # Print info
-    print(f"Loaded {len(df)} keypoint match filtering records from {args.csv}")
+    print(f"Loaded {len(df)} keypoint match displacement filtering records from {args.csv}")
     print(f"Frames: {df['frame_index'].min()} to {df['frame_index'].max()}")
     print(f"Columns: {list(df.columns)}")
     

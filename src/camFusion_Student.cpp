@@ -6,6 +6,7 @@
 #include <iostream>
 #include <algorithm>
 #include <numeric>
+#include <cmath>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
@@ -81,11 +82,29 @@ void clusterLidarWithROI(std::vector<BoundingBox> &boundingBoxes, std::vector<Li
  * Note: Text output is tuned for 2000x2000 image size. For other sizes,
  * text positions should be adjusted proportionally.
  */
-void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait, int trackedPrecedingVehicleTrackID)
+void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait, int trackedPrecedingVehicleTrackID, int frameIndex, const std::string &dataPath)
 {
     // create topview image
     cv::Mat topviewImg(imageSize, CV_8UC3, cv::Scalar(255, 255, 255));
 
+    // First pass: find global min/max z values across all bounding boxes for consistent coloring
+    float global_zwmin=1e8, global_zwmax=-1e8;
+    for(auto it1=boundingBoxes.begin(); it1!=boundingBoxes.end(); ++it1)
+    {
+        for (auto it2 = it1->lidarPoints.begin(); it2 != it1->lidarPoints.end(); ++it2)
+        {
+            float zw = (*it2).z; // world position in m with z facing up from sensor
+            global_zwmin = global_zwmin < zw ? global_zwmin : zw;
+            global_zwmax = global_zwmax > zw ? global_zwmax : zw;
+        }
+    }
+    
+    // Default to reasonable values if no points found
+    if (global_zwmin > global_zwmax) {
+        global_zwmin = -2.0;
+        global_zwmax = 2.0;
+    }
+    
     for(auto it1=boundingBoxes.begin(); it1!=boundingBoxes.end(); ++it1)
     {
         // Determine color based on trackID: red for tracked preceding vehicle, blue for others
@@ -104,11 +123,14 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
         // plot Lidar points into top view image
         int top=1e8, left=1e8, bottom=0.0, right=0.0; 
         float xwmin=1e8, ywmin=1e8, ywmax=-1e8;
+        
+        // Second pass: draw points with height-based coloring
         for (auto it2 = it1->lidarPoints.begin(); it2 != it1->lidarPoints.end(); ++it2)
         {
             // world coordinates
             float xw = (*it2).x; // world position in m with x facing forward from sensor
             float yw = (*it2).y; // world position in m with y facing left from sensor
+            float zw = (*it2).z; // world position in m with z facing up from sensor
             xwmin = xwmin<xw ? xwmin : xw;
             ywmin = ywmin<yw ? ywmin : yw;
             ywmax = ywmax>yw ? ywmax : yw;
@@ -123,19 +145,38 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
             bottom = bottom>y ? bottom : y;
             right = right>x ? right : x;
 
-            // draw individual point
-            cv::circle(topviewImg, cv::Point(x, y), 4, currColor, -1);
+            // Height-based coloring: blue (low) to red (high)
+            cv::Scalar pointColor;
+            if (global_zwmax > global_zwmin) // Avoid division by zero
+            {
+                // Normalize z to [0, 1] range using global min/max for consistent coloring
+                float normalized_z = (zw - global_zwmin) / (global_zwmax - global_zwmin);
+                // Blue to red gradient: B(255,0,0) to R(0,0,255) in OpenCV BGR
+                pointColor = cv::Scalar(255 * (1 - normalized_z), 0, 255 * normalized_z);
+            }
+            else
+            {
+                // All points at same height, use default color
+                pointColor = currColor;
+            }
+            
+            // Draw all points with height-based coloring
+            cv::circle(topviewImg, cv::Point(x, y), 4, pointColor, -1);
         }
 
-        // draw enclosing rectangle
-        cv::rectangle(topviewImg, cv::Point(left, top), cv::Point(right, bottom), cv::Scalar(0,0,0), 2);
+        // draw enclosing rectangle - use red for tracked preceding vehicle, black for others
+        cv::Scalar boxColor = (trackedPrecedingVehicleTrackID != -1 && it1->trackID == trackedPrecedingVehicleTrackID) 
+                             ? cv::Scalar(0, 0, 255) : cv::Scalar(0, 0, 0);
+        cv::rectangle(topviewImg, cv::Point(left, top), cv::Point(right, bottom), boxColor, 2);
 
         // augment object with some key data including track info
         std::string str1 = cv::format("box_id=%d, track_id=%d, age=%d, #pts=%d", 
                                       it1->boxID, it1->trackID, it1->trackAge, (int)it1->lidarPoints.size());
-        putText(topviewImg, str1, cv::Point2f(left-250, bottom+50), cv::FONT_ITALIC, 2, currColor);
+        cv::Scalar textColor = (trackedPrecedingVehicleTrackID != -1 && it1->trackID == trackedPrecedingVehicleTrackID) 
+                              ? cv::Scalar(0, 0, 255) : cv::Scalar(255, 0, 0);
+        cv::putText(topviewImg, str1, cv::Point2f(left-250, bottom+50), cv::FONT_ITALIC, 1.5, textColor, 2);
         std::string str2 = cv::format("xmin=%.2f m, yw=%.2f m", xwmin, ywmax-ywmin);
-        putText(topviewImg, str2, cv::Point2f(left-250, bottom+125), cv::FONT_ITALIC, 2, currColor);  
+        cv::putText(topviewImg, str2, cv::Point2f(left-250, bottom+100), cv::FONT_ITALIC, 1.5, textColor, 2);  
     }
 
     // plot distance markers
@@ -145,6 +186,84 @@ void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, 
     {
         int y = (-(i * lineSpacing) * imageSize.height / worldSize.height) + imageSize.height;
         cv::line(topviewImg, cv::Point(0, y), cv::Point(imageSize.width, y), cv::Scalar(255, 0, 0));
+    }
+    
+    // Add vertical color bar legend for height visualization with tick marks every 20cm
+    int legendBarWidth = 70;  // Width of the color bar
+    int legendBarHeight = 600; // Height of the color bar (triple the original size)
+    int legendX = imageSize.width - legendBarWidth - 120;  // Position from right
+    int legendY = 100;  // Position from top
+    
+    // Create vertical color bar from blue (bottom/low) to red (top/high)
+    cv::Mat colorBar(legendBarHeight, legendBarWidth, CV_8UC3);
+    for (int y = 0; y < legendBarHeight; ++y)
+    {
+        float ratio = static_cast<float>(y) / legendBarHeight;
+        cv::Scalar color = cv::Scalar(255 * (1 - ratio), 0, 255 * ratio);
+        cv::line(colorBar, cv::Point(0, y), cv::Point(legendBarWidth-1, y), color, 1);
+    }
+    
+    // Overlay color bar on main image
+    cv::Mat roi = topviewImg(cv::Rect(legendX, legendY, legendBarWidth, legendBarHeight));
+    colorBar.copyTo(roi);
+    
+    // Add black outline around color bar for better visibility
+    cv::rectangle(topviewImg, cv::Rect(legendX, legendY, legendBarWidth, legendBarHeight), 
+                 cv::Scalar(0, 0, 0), 2);
+    
+    // Calculate height range and add tick marks every 20cm
+    float heightRange = global_zwmax - global_zwmin;
+    if (heightRange > 0.1) // Only add ticks if we have meaningful range
+    {
+        // Round the range to nearest multiple of 10cm for nice tick placement
+        int numTicks = static_cast<int>(heightRange / 0.1) + 1;
+        
+        for (int i = 0; i <= numTicks; ++i)
+        {
+            float tickHeight = global_zwmin + (i * 0.1f); // Every 20cm
+            if (tickHeight > global_zwmax) break;
+            
+            // Calculate y position for this tick
+            float ratio = (tickHeight - global_zwmin) / heightRange;
+            int tickY = legendY + legendBarHeight - static_cast<int>(ratio * legendBarHeight);
+            
+            // Draw tick mark (horizontal line extending right from color bar)
+            int tickLength = 25;
+            cv::line(topviewImg, cv::Point(legendX + legendBarWidth, tickY), 
+                    cv::Point(legendX + legendBarWidth + tickLength, tickY), 
+                    cv::Scalar(0, 0, 0), 1);
+            
+            // // Add height value label for significant ticks
+            // if (i % 2 == 0 || i == numTicks) // Show every other tick to avoid clutter
+            // {
+            std::string tickText = cv::format("%.1f", tickHeight);
+            cv::putText(topviewImg, tickText, cv::Point(legendX + legendBarWidth + tickLength + 5, tickY + 4), 
+                        cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 0), 1);
+            // }
+        }
+    }
+    
+    // Add main annotations
+    cv::putText(topviewImg, "Height (z)", cv::Point(legendX - 50, legendY - 15), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 0), 2);
+    
+    // Add unit label
+    cv::putText(topviewImg, "[m]", cv::Point(legendX + legendBarWidth + 20, legendY - 15), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 0, 0), 2);
+    
+    // Add low/high indicators
+    std::string lowText = cv::format("Low: %.2f m", global_zwmin);
+    std::string highText = cv::format("High: %.2f m", global_zwmax);
+    cv::putText(topviewImg, lowText, cv::Point(legendX - 100, legendY + legendBarHeight + 25), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 1); // Blue for low
+    cv::putText(topviewImg, highText, cv::Point(legendX - 100, legendY + legendBarHeight + 50), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 1); // Red for high
+
+    // Save the bird's-eye view image to file for FP.5 analysis
+    if (frameIndex >= 0 && !dataPath.empty())
+    {
+        std::string filename = dataPath + "preceding_vehicle_lidar_bev_" + std::to_string(frameIndex) + ".png";
+        cv::imwrite(filename, topviewImg);
     }
 
     // display image
@@ -216,6 +335,64 @@ std::vector<cv::DMatch> filterMatchesByDistance(
 }
 
 /**
+ * @brief Filters keypoint matches by maximum displacement threshold
+ * 
+ * For FP.3: Removes matches where the Euclidean displacement between matched keypoints
+ * exceeds a threshold based on the bounding box size. Large displacements can indicate
+ * mismatches or objects moving unrealistically fast. This is different from the percentile
+ * filtering in filterMatchesByDistance.
+ * 
+ * The threshold is set to 1/8 of the bounding box's longest dimension (width or height).
+ * This ensures we only keep matches with reasonable displacement for the tracked object.
+ * 
+ * @param matches Vector of keypoint matches to filter
+ * @param kptsPrev Keypoints from previous frame
+ * @param kptsCurr Keypoints from current frame  
+ * @param boundingBox Bounding box for threshold calculation (optional, can be null)
+ * @param maxDisplacementThreshold Optional explicit threshold in pixels (overrides box-based threshold)
+ * @return Filtered vector of matches with displacement <= threshold
+ */
+std::vector<cv::DMatch> filterMatchesByDisplacement(
+    const std::vector<cv::DMatch> &matches,
+    const std::vector<cv::KeyPoint> &kptsPrev,
+    const std::vector<cv::KeyPoint> &kptsCurr,
+    const BoundingBox *boundingBox,
+    double maxDisplacementThreshold)
+{
+    if (matches.empty()) return matches;
+    
+    // Determine threshold
+    double threshold = maxDisplacementThreshold;
+    if (threshold <= 0 && boundingBox != nullptr)
+    {
+        // Use 1/8 of the bounding box's longest dimension as threshold
+        int longestDim = std::max(boundingBox->roi.width, boundingBox->roi.height);
+        threshold = longestDim / 8.0;
+    }
+    else if (threshold <= 0)
+    {
+        // Default threshold if no bounding box provided
+        threshold = 100.0; // pixels - reasonable default for KITTI
+    }
+    
+    std::vector<cv::DMatch> filtered;
+    for (const auto &match : matches)
+    {
+        const cv::KeyPoint &prevKp = kptsPrev[match.queryIdx];
+        const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+        double displacement = cv::norm(prevKp.pt - currKp.pt);
+        
+        // Keep matches with displacement <= threshold (remove large displacements)
+        if (displacement <= threshold)
+        {
+            filtered.push_back(match);
+        }
+    }
+    
+    return filtered;
+}
+
+/**
  * @brief Associates keypoint matches with a single bounding box
  * 
  * Collects all keypoint matches where the current keypoint falls within the bounding box ROI,
@@ -245,8 +422,8 @@ void clusterKptMatchesWithROI(BoundingBox &boundingBox, std::vector<cv::KeyPoint
         }
     }
     
-    // Apply percentile-based outlier removal
-    boundingBox.kptMatches = filterMatchesByDistance(matchesInBox, kptsPrev, kptsCurr);
+    // Apply displacement-based outlier removal for FP.3
+    boundingBox.kptMatches = filterMatchesByDisplacement(matchesInBox, kptsPrev, kptsCurr, &boundingBox, -1.0);
 }
 
 
@@ -310,7 +487,9 @@ std::vector<std::tuple<int, int, int>> clusterAllKptMatchesWithROI(
         }
     }
     
-    // Apply percentile-based outlier removal for each bounding box
+    // Apply displacement-based outlier removal for each bounding box (FP.3)
+    // Uses upper threshold on keypoint displacement (removes large displacements)
+    // Threshold: 1/8 of bounding box's longest dimension
     std::vector<std::tuple<int, int, int>> stats; // (boxID, before, after)
     for (auto &bb : boundingBoxes)
     {
@@ -319,7 +498,8 @@ std::vector<std::tuple<int, int, int>> clusterAllKptMatchesWithROI(
         
         if (!bb.kptMatches.empty())
         {
-            bb.kptMatches = filterMatchesByDistance(bb.kptMatches, kptsPrev, kptsCurr);
+            // For FP.3: Use displacement filtering with upper threshold based on box size
+            bb.kptMatches = filterMatchesByDisplacement(bb.kptMatches, kptsPrev, kptsCurr, &bb, -1.0);
         }
         
         after = static_cast<int>(bb.kptMatches.size());
@@ -379,9 +559,9 @@ std::vector<cv::DMatch> getKptMatchesForBBPair(
  * @param matchesAfter Matches after filtering
  * @param kptsPrev Keypoints from previous frame
  * @param kptsCurr Keypoints from current frame
- * @return Tuple of (matchesBefore, matchesAfter, outliersRemovedPct, meanDistance, medianDistance, stddevDistance)
+ * @return Tuple of (matchesBefore, matchesAfter, outliersRemovedPct, meanDistance, medianDistance, stddevDistance, minDistance, maxDistance)
  */
-std::tuple<int, int, double, double, double, double> 
+std::tuple<int, int, double, double, double, double, double, double> 
 computeKptMatchStats(const std::vector<cv::DMatch> &matchesBefore,
                      const std::vector<cv::DMatch> &matchesAfter,
                      const std::vector<cv::KeyPoint> &kptsPrev,
@@ -392,6 +572,7 @@ computeKptMatchStats(const std::vector<cv::DMatch> &matchesBefore,
     double outliersRemovedPct = (before > 0) ? (100.0 * (before - after) / before) : 0.0;
     
     double meanDist = 0.0, medianDist = 0.0, stddevDist = 0.0;
+    double minDist = 0.0, maxDist = 0.0;
     
     if (after > 0)
     {
@@ -411,10 +592,12 @@ computeKptMatchStats(const std::vector<cv::DMatch> &matchesBefore,
             medianDist = distances[distances.size() / 2];
             double sq_sum = std::inner_product(distances.begin(), distances.end(), distances.begin(), 0.0);
             stddevDist = std::sqrt(sq_sum / distances.size() - meanDist * meanDist);
+            minDist = distances.front();
+            maxDist = distances.back();
         }
     }
     
-    return std::make_tuple(before, after, outliersRemovedPct, meanDist, medianDist, stddevDist);
+    return std::make_tuple(before, after, outliersRemovedPct, meanDist, medianDist, stddevDist, minDist, maxDist);
 }
 
 
@@ -447,97 +630,6 @@ double computeMedian(std::vector<double> values)
         double valueB = values[mid];
         return (valueA + valueB) / 2.0;
     }
-}
-
-
-/**
- * @brief Filters out background keypoint matches based on distance ratio clustering
- * 
- * Background matches have distance ratios near 1.0 (no scale change).
- * This function identifies and removes the background cluster to retain only
- * foreground matches (significantly different from 1.0).
- * 
- * Uses median absolute deviation from 1.0 to compute a threshold for background detection.
- * Only filters if a clear bimodal distribution is detected (background + foreground).
- * 
- * @param distRatios Vector of distance ratios to filter
- * @param thresholdMultiplier Multiplier for median deviation (default: 0.2, higher = more aggressive)
- * @param bgMinRatio Minimum background ratio for cluster detection (default: 0.2)
- * @param bgMaxRatio Maximum background ratio for cluster detection (default: 0.6)
- * @param maxDevMultiplier Multiplier for bgThreshold in max deviation check (default: 3.0)
- * @return Filtered vector of distance ratios (foreground only)
- */
-std::vector<double> filterBackgroundCluster(const std::vector<double>& distRatios,
-                                             double thresholdMultiplier,
-                                             double bgMinRatio,
-                                             double bgMaxRatio,
-                                             double maxDevMultiplier)
-{
-    if (distRatios.size() < 5) 
-        return distRatios; // Not enough data to filter
-    
-    // Compute statistics to identify clusters
-    double minRatio = *std::min_element(distRatios.begin(), distRatios.end());
-    double maxRatio = *std::max_element(distRatios.begin(), distRatios.end());
-    double medianRatio = computeMedian(distRatios);
-    
-    // Compute deviation from 1.0 (scale change)
-    std::vector<double> deviations;
-    for (double ratio : distRatios)
-    {
-        deviations.push_back(std::abs(ratio - 1.0));
-    }
-    
-    double minDeviation = *std::min_element(deviations.begin(), deviations.end());
-    double maxDeviation = *std::max_element(deviations.begin(), deviations.end());
-    double medianDeviation = computeMedian(deviations);
-    
-    // Use threshold multiplier to control filtering aggressiveness
-    // Higher values = more aggressive filtering (filters more ratios as background)
-    // Lower values = more conservative filtering (keeps more ratios)
-    // Note: medianDeviation is typically ~0.007-0.01, so 0.2 multiplier gives ~0.0014-0.002
-    double bgThreshold = medianDeviation * thresholdMultiplier;
-    
-    // Count how many would be filtered
-    int backgroundCount = 0;
-    for (double dev : deviations)
-    {
-        if (dev < bgThreshold)
-            backgroundCount++;
-    }
-    
-    // Check if we have a clear bimodal distribution (background + foreground)
-    // Narrower window (0.2-0.6) better isolates background cluster
-    // maxDeviation check with lower multiplier (3.0) to be more sensitive
-    double backgroundRatio = static_cast<double>(backgroundCount) / distRatios.size();
-    bool hasBackgroundCluster = (maxDeviation > maxDevMultiplier * bgThreshold) && 
-                                 (backgroundRatio > bgMinRatio) && 
-                                 (backgroundRatio < bgMaxRatio); // Don't filter if >60% would be removed
-    
-    if (hasBackgroundCluster)
-    {
-        // Filter out background points (deviation < threshold)
-        std::vector<double> filtered;
-        for (size_t i = 0; i < distRatios.size(); ++i)
-        {
-            if (deviations[i] >= bgThreshold)
-            {
-                filtered.push_back(distRatios[i]);
-            }
-        }
-        
-        std::cout << "All ratios counts: " << distRatios.size() << "  / background removed ratios count: " << filtered.size() << std::endl;
-
-        // More defensive: only use filtered if we keep at least 50% of the original ratios
-        if (filtered.size() >= 3 && filtered.size() >= distRatios.size() * 0.5)
-        {
-            return filtered;
-        }
-    }
-    
-    // No clear background cluster or not enough foreground points
-    // Return original ratios
-    return distRatios;
 }
 
 
@@ -1201,5 +1293,193 @@ void printBBMatchInfo(const std::map<int, int> &bbBestMatches,
         
         std::cout << "  Prev BB " << prevBoxID << " -> Curr BB " << currBoxID 
                   << " (" << count << " keypoint matches)" << std::endl;
+    }
+}
+
+/**
+ * @brief Visualizes keypoint matches on bounding boxes and optionally saves to file
+ * 
+ * Draws matched keypoints between previous and current frames on the camera image,
+ * highlighting keypoints within the tracked bounding box. Useful for FP.5 analysis.
+ */
+void showKeypointMatchesOverlay(
+    cv::Mat &img, 
+    std::vector<cv::KeyPoint> &kptsPrev, 
+    std::vector<cv::KeyPoint> &kptsCurr, 
+    std::vector<cv::DMatch> &kptMatches,
+    BoundingBox &trackedBoundingBox,
+    int frameIndex,
+    const std::string &dataPath,
+    bool bVis)
+{
+    // Create visualization image
+    cv::Mat visImg = img.clone();
+    
+    // Draw bounding box of tracked vehicle
+    cv::rectangle(visImg, trackedBoundingBox.roi, cv::Scalar(0, 255, 0), 2);
+    
+    // Define colors
+    cv::Scalar colorPrev(0, 255, 255);   // Yellow for previous frame keypoints
+    cv::Scalar colorCurr(0, 255, 0);     // Green for current frame keypoints
+    
+    // Draw all keypoints from current frame within the bounding box
+    int kpRadius = 3;  // Radius of keypoint circles
+    int matchedCount = 0;
+        
+    // Draw matched keypoints with lines connecting previous to current
+    // Note: The input kptMatches should already be filtered to contain only matches
+    // where previous keypoint is in the previous bounding box AND current keypoint is in the current bounding box
+    for (const auto &match : kptMatches)
+    {
+        const cv::KeyPoint &prevKp = kptsPrev[match.queryIdx];
+        const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+        
+        // Draw circles at both keypoint positions
+        cv::circle(visImg, prevKp.pt, kpRadius, colorPrev, 0, cv::LINE_AA);
+        cv::circle(visImg, currKp.pt, kpRadius, colorCurr, 0, cv::LINE_AA);
+        
+        ++matchedCount;
+    }
+    
+    // Add legend for the visualization
+    int legendX = 50;
+    int legendY = 90;
+    int legendSpacing = 30;
+    
+    // Magenta color for better visibility on bright images (BGR format)
+    cv::Scalar legendColor = cv::Scalar(0, 255, 0); // Green
+    cv::Scalar textColor = cv::Scalar(255, 0, 255); // Magenta
+    
+    // Title
+    cv::putText(visImg, "Keypoint Matches on Tracked Vehicle", cv::Point(legendX, legendY - 40), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.8, legendColor, 2);
+    
+    // Legend items
+    cv::putText(visImg, "Previous Frame", cv::Point(legendX, legendY + legendSpacing * 0), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, textColor, 1);
+    cv::putText(visImg, "Current Frame", cv::Point(legendX, legendY + legendSpacing * 1), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, textColor, 1);
+    
+    // Legend color indicators
+    cv::circle(visImg, cv::Point(legendX - 15, legendY + legendSpacing * 0 - 2), kpRadius, colorPrev, -1);
+    cv::circle(visImg, cv::Point(legendX - 15, legendY + legendSpacing * 1 - 2), kpRadius, colorCurr, -1);
+    
+    // Add match count information
+    cv::putText(visImg, cv::format("Matches within BB: %d", matchedCount), cv::Point(legendX, legendY + legendSpacing * 3 + 10), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, textColor, 1);
+    
+    // Add bounding box info
+    cv::putText(visImg, cv::format("BB ID: %d, Track ID: %d", trackedBoundingBox.boxID, trackedBoundingBox.trackID), 
+               cv::Point(legendX, legendY + legendSpacing * 4 + 20), 
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, textColor, 1);
+    
+    // Save image to file if dataPath is provided and frameIndex >= 0
+    if (frameIndex >= 0 && !dataPath.empty() && bVis)
+    {
+        std::string filename = dataPath + "keypoint_matches_" + std::to_string(frameIndex) + ".png";
+        cv::imwrite(filename, visImg);
+    }
+    
+    // Display image if visualization is enabled
+    if (bVis)
+    {
+        std::string windowName = "Keypoint Matches on Tracked Vehicle - Frame " + std::to_string(frameIndex);
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::imshow(windowName, visImg);
+        cv::waitKey(10); // Short wait for visualization
+    }
+}
+
+
+/**
+ * @brief Visualizes all bounding boxes on the camera image
+ * 
+ * Draws all detected bounding boxes on the camera image for documentation purposes.
+ * Each bounding box is drawn with a unique color and labeled with its boxID.
+ * Useful for showing the results of object detection in FP.1.
+ * 
+ * @param img Camera image
+ * @param boundingBoxes Vector of all bounding boxes to visualize
+ * @param frameIndex Current frame index for file naming
+ * @param dataPath Path to save output images
+ * @param bVis Enable visualization display
+ */
+void showAllBoundingBoxes(
+    cv::Mat &img,
+    std::vector<BoundingBox> &boundingBoxes,
+    int frameIndex,
+    const std::string &dataPath,
+    bool bVis)
+{
+    // Create visualization image
+    cv::Mat visImg = img.clone();
+    
+    // Define colors for different bounding boxes
+    std::vector<cv::Scalar> colors = {
+        cv::Scalar(255, 0, 0),     // Blue
+        cv::Scalar(0, 255, 0),     // Green
+        cv::Scalar(0, 0, 255),     // Red
+        cv::Scalar(255, 255, 0),   // Yellow
+        cv::Scalar(0, 255, 255),   // Cyan
+        cv::Scalar(255, 0, 255),   // Magenta
+        cv::Scalar(128, 0, 0),     // Dark Blue
+        cv::Scalar(0, 128, 0),     // Dark Green
+        cv::Scalar(0, 0, 128),     // Dark Red
+        cv::Scalar(128, 128, 0),   // Dark Yellow
+        cv::Scalar(0, 128, 128),   // Dark Cyan
+        cv::Scalar(128, 0, 128),   // Dark Magenta
+        cv::Scalar(255, 128, 0),   // Orange
+        cv::Scalar(128, 255, 0),   // Light Green
+        cv::Scalar(0, 128, 255),   // Light Blue
+        cv::Scalar(255, 0, 128),   // Pink
+    };
+    
+    // Draw all bounding boxes
+    for (size_t i = 0; i < boundingBoxes.size(); ++i)
+    {
+        BoundingBox &bb = boundingBoxes[i];
+        cv::Scalar color = colors[i % colors.size()];
+        
+        // Draw bounding box rectangle
+        cv::rectangle(visImg, 
+                     cv::Point(bb.roi.x, bb.roi.y),
+                     cv::Point(bb.roi.x + bb.roi.width, bb.roi.y + bb.roi.height),
+                     color, 3);
+        
+        // Add label with boxID
+        std::string label = cv::format("ID: %d", bb.boxID);
+        cv::putText(visImg, label, 
+                   cv::Point(bb.roi.x + 10, bb.roi.y + 30),
+                   cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(255, 0, 255), 2);
+        
+        // Add trackID if available
+        if (bb.trackID >= 0)
+        {
+            std::string trackLabel = cv::format("Track: %d", bb.trackID);
+            cv::putText(visImg, trackLabel,
+                       cv::Point(bb.roi.x + 10, bb.roi.y + 60),
+                       cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(255, 0, 255), 1);
+        }
+    }
+    
+    // Add title
+    cv::putText(visImg, cv::format("Frame %d: All Detected Bounding Boxes", frameIndex),
+               cv::Point(50, 50), cv::FONT_HERSHEY_SIMPLEX, 1.2, cv::Scalar(255, 0, 255), 2);
+        
+    // Save image to file
+    if (frameIndex >= 0 && !dataPath.empty())
+    {
+        std::string filename = dataPath + "fp1_all_bounding_boxes_frame_" + std::to_string(frameIndex) + ".png";
+        cv::imwrite(filename, visImg);
+        std::cout << "Saved all bounding boxes visualization to: " << filename << std::endl;
+    }
+    
+    // Display image if visualization is enabled
+    if (bVis)
+    {
+        std::string windowName = "All Bounding Boxes - Frame " + std::to_string(frameIndex);
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::imshow(windowName, visImg);
+        cv::waitKey(10);
     }
 }
