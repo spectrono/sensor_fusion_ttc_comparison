@@ -493,7 +493,33 @@ def plot_filtering_impact(df_scale, output_dir=".", output_prefix="fp4_filtering
                  transform=plt.gca().transAxes, ha='center', va='center', fontsize=12)
         plt.title('Median Ratio Shift', fontsize=14)
     
-    # Plot 4: Cumulative statistics
+    # Plot 4: Cumulative statistics - create as separate figure for README
+    # Save pie chart separately for use in README
+    if 'num_ratios' in df_scale.columns and 'num_filtered' in df_scale.columns:
+        total_before = df_scale['num_ratios'].sum()
+        total_after = df_scale['num_filtered'].sum()
+        total_removed = total_before - total_after
+        pct_total_removed = (total_removed / total_before) * 100 if total_before > 0 else 0
+        
+        # Create standalone pie chart figure
+        plt.figure(figsize=(8, 8))
+        sizes = [total_before - total_removed, total_removed]
+        labels = [f'Kept: {total_after}\n({100-pct_total_removed:.1f}%)', 
+                  f'Removed by minDist\n{total_removed} pairs ({pct_total_removed:.1f}%)']
+        colors = ['green', 'red']
+        
+        plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
+                startangle=90, explode=(0, 0.1), textprops={'fontsize': 14})
+        plt.title(f'Keypoint Pair Filtering by minDist=110.0\n{total_removed}/{total_before} pairs removed ({pct_total_removed:.1f}%)', 
+                  fontsize=14, pad=20)
+        
+        # Save standalone pie chart
+        pie_output_path = os.path.join(output_dir, "fp4_keypoint_pair_filtering_pie.png")
+        plt.savefig(pie_output_path, dpi=300, bbox_inches='tight')
+        plt.close()
+        print(f"Saved keypoint pair filtering pie chart to: {pie_output_path}")
+    
+    # Plot 4: Cumulative statistics (as part of the 2x2 grid)
     plt.subplot(2, 2, 4)
     
     if 'num_ratios' in df_scale.columns and 'num_filtered' in df_scale.columns:

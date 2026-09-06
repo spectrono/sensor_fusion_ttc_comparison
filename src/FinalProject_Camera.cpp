@@ -120,19 +120,6 @@ int main(int argc, const char *argv[])
     };
     std::vector<BBMatchData> bbMatchResults;
     
-    // For FP.3/FP.4 filtering progression analysis: store match counts at each stage
-    struct FilteringProgressionData {
-        int frameIndex;
-        int trackId;
-        int boxId;
-        int fp1Count;      // Raw matches (only bounding box filtering)
-        int fp3Count;      // After displacement filtering (FP.3)
-        int fp4Count;      // Matches used for camera TTC (FP.4)
-        double displacementThreshold;  // Threshold used for displacement filtering
-    };
-    std::vector<FilteringProgressionData> filteringProgressionResults;
-    bool bRecordFilteringProgression = true; // Enable filtering progression CSV export
-    
     // Current detector and descriptor types for CSV export
     std::string currentDetectorType = "SHITOMASI";
     std::string currentDescriptorType = "ORB";
@@ -826,6 +813,9 @@ int main(int argc, const char *argv[])
                     
                     // Compute distance ratios for debugging/analysis
                     std::vector<double> distRatios;
+                    int totalPairs = 0;
+                    int filteredPairs = 0;
+                    
                     for (auto it1 = pairedMatches.begin(); it1 != pairedMatches.end() - 1; ++it1)
                     {
                         const cv::KeyPoint &kpOuterCurr = (dataBuffer.end() - 1)->keypoints.at(it1->trainIdx);
@@ -833,6 +823,8 @@ int main(int argc, const char *argv[])
                         
                         for (auto it2 = it1 + 1; it2 != pairedMatches.end(); ++it2)
                         {
+                            totalPairs++;
+                            
                             const cv::KeyPoint &kpInnerCurr = (dataBuffer.end() - 1)->keypoints.at(it2->trainIdx);
                             const cv::KeyPoint &kpInnerPrev = (dataBuffer.end() - 2)->keypoints.at(it2->queryIdx);
                             
@@ -844,6 +836,7 @@ int main(int argc, const char *argv[])
                             {
                                 double distRatio = distCurr / distPrev;
                                 distRatios.push_back(distRatio);
+                                filteredPairs++;
                             }
                         }
                     }
@@ -868,7 +861,8 @@ int main(int argc, const char *argv[])
                         CameraTTCScaleStats stats;
                         stats.frameIndex = imgStartIndex + imgIndex;
                         stats.trackId = trackedPrecedingVehicleTrackID;
-                        stats.numRatios = static_cast<int>(distRatios.size());
+                        stats.numRatios = totalPairs;  // Total pairs before minDist filtering
+                        stats.numFiltered = filteredPairs;  // Pairs after minDist filtering
                         
                         if (!distRatios.empty())
                         {
@@ -888,51 +882,14 @@ int main(int argc, const char *argv[])
                             stats.stddevRatio = 0.0;
                         }
                         
-                        // Without background filtering, all ratios are retained
-                        stats.numFiltered = stats.numRatios;
+                        // For filtered ratios (after minDist filtering)
+                        // Note: filtered_* stats are same as unfiltered_* since we already filtered during distRatios construction
+                        // But we track numRatios (total) vs numFiltered (after minDist) separately
                         stats.filteredMinRatio = stats.minRatio;
                         stats.filteredMaxRatio = stats.maxRatio;
                         stats.filteredMedianRatio = stats.medianRatio;
                         
                         cameraTTCScaleStats.push_back(stats);
-                    }
-                    
-                    // Record filtering progression data for FP.1, FP.3, FP.4 comparison
-                    if (bRecordFilteringProgression && prevBB != nullptr && currBB != nullptr)
-                    {
-                        // Get FP.1 count (raw matches with hard constraint - both keypoints in their respective boxes)
-                        // Use getKptMatchesForBBPair to ensure consistency with FP.3 counting
-                        std::vector<cv::DMatch> fp1Matches = getKptMatchesForBBPair(
-                            *prevBB, *currBB,
-                            (dataBuffer.end() - 2)->keypoints,
-                            (dataBuffer.end() - 1)->keypoints,
-                            (dataBuffer.end() - 1)->kptMatches);
-                        int fp1Count = static_cast<int>(fp1Matches.size());
-                        
-                        // Get FP.3 count (after displacement filtering)
-                        int fp3Count = static_cast<int>(pairedMatchesFiltered.size());
-                        
-                        // Get FP.4 count (same as FP.3, these are used for camera TTC)
-                        int fp4Count = static_cast<int>(pairedMatchesFiltered.size());
-                        
-                        // Get displacement threshold used
-                        double threshold = 0.0;
-                        if (currBB != nullptr)
-                        {
-                            int longestDim = std::max(currBB->roi.width, currBB->roi.height);
-                            threshold = longestDim / 8.0;
-                        }
-                        
-                        FilteringProgressionData progData;
-                        progData.frameIndex = imgStartIndex + imgIndex;
-                        progData.trackId = trackedPrecedingVehicleTrackID;
-                        progData.boxId = currBB->boxID;
-                        progData.fp1Count = fp1Count;
-                        progData.fp3Count = fp3Count;
-                        progData.fp4Count = fp4Count;
-                        progData.displacementThreshold = threshold;
-                        
-                        filteringProgressionResults.push_back(progData);
                     }
                     
                     //// EOF STUDENT ASSIGNMENT
@@ -1219,40 +1176,6 @@ int main(int argc, const char *argv[])
             csvFile.close();
             std::cout << "\nFP.4 Camera TTC scale statistics saved to " << csvFilename << std::endl;
             std::cout << "Total scale stat records: " << cameraTTCScaleStats.size() << std::endl;
-        }
-        else
-        {
-            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
-        }
-    }
-
-    // Save FP.3/FP.4 filtering progression data to CSV for analysis
-    if (bRecordFilteringProgression && !filteringProgressionResults.empty())
-    {
-        std::string csvFilename = dataPath + "analysis/output/filtering_progression.csv";
-        std::ofstream csvFile(csvFilename);
-        
-        if (csvFile.is_open())
-        {
-            // Write CSV header
-            csvFile << "frame_index,track_id,box_id,fp1_raw_count,fp3_displacement_filtered_count,fp4_camera_ttc_count,displacement_threshold\n";
-            
-            // Write data rows
-            for (const auto& data : filteringProgressionResults)
-            {
-                csvFile << data.frameIndex << ","
-                        << data.trackId << ","
-                        << data.boxId << ","
-                        << data.fp1Count << ","
-                        << data.fp3Count << ","
-                        << data.fp4Count << ","
-                        << std::fixed << std::setprecision(2)
-                        << data.displacementThreshold << "\n";
-            }
-            
-            csvFile.close();
-            std::cout << "\nFP.3/FP.4 Filtering progression data saved to " << csvFilename << std::endl;
-            std::cout << "Total progression records: " << filteringProgressionResults.size() << std::endl;
         }
         else
         {

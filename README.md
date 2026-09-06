@@ -412,8 +412,7 @@ The code works as described and adds the keypoint matches to the "kptMatches" pr
 - Returns statistics tuple (boxID, matchesBefore, matchesAfter) for analysis
 - Added data collection mode (`bRecordKptStats = true`) to generate CSV for analysis
 - CSV output: `analysis/output/kpt_matches_filtering.csv` with per-frame, per-box statistics
-- Tracking results exported to `analysis/output/bb_matches.csv` with track_id, prev_box_id, curr_box_id informationf
-- Filtering progression CSV `analysis/output/filtering_progression.csv` with FP.1, FP.3, FP.4 match counts
+- Tracking results exported to `analysis/output/bb_matches.csv` with track_id, prev_box_id, curr_box_id information
 
 ## **Results:**
 
@@ -428,8 +427,6 @@ The comparison plot below shows the keypoint match filtering results:
 *Figure: Keypoint match counts before vs after displacement filtering (red=before, green=after), outlier removal percentage, FP.1 unfiltered distance statistics (mean, median, min, max), and FP.3 filtered distance statistics (mean, median, min, max). The tracked preceding vehicle shows consistent filtering with displacement threshold based on bounding box size. Overall, 24 matches (1.5%) were removed across all frames and all boxes, with mean matches per frame for the tracked vehicle at 87.4 before filtering and 86.1 after filtering.*
 
 The raw comparison data is available in [analysis/output/kpt_matches_filtering.csv](analysis/output/kpt_matches_filtering.csv) for further analysis.
-
-**Note:** Comprehensive filtering comparison including FP.1, FP.3, and FP.4 is shown in the FP.4 section below.
 
 **Visualization Example:**
 The following image illustrates the keypoint matching on the tracked preceding vehicle, showing how matches are used for bounding box association and tracking:
@@ -562,6 +559,13 @@ The code is functional and produces the specified output. Additionally, the code
 
 ## **Results:**
 
+**Keypoint Pair Filtering Impact:**
+The minDist=110.0 threshold removes close keypoint pairs to ensure robust TTC estimation:
+
+![FP.4 Keypoint Pair Filtering](analysis/output/fp4_keypoint_pair_filtering_pie.png)
+
+*Figure: Impact of minDist=110.0 filtering on keypoint pairs across all 18 frames. **Total keypoint pairs generated: 66,092**. **Pairs removed by minDist threshold: 55,708 (84.3%)**. **Pairs retained for TTC estimation: 10,384**. The pie chart shows the proportion of kept (green) vs removed (red) pairs, with the minDist filter ensuring only well-separated keypoint pairs are used for robust scale ratio computation.*
+
 **Current Implementation (minDist=110.0):**
 - Mean TTC: 12.13s
 - Median TTC: 12.31s
@@ -570,9 +574,7 @@ The code is functional and produces the specified output. Additionally, the code
 - Max TTC: 14.91s
 - Valid samples: 18/18 (100%)
 
-A detailed comparison between camera and LIDAR TTC measurements is provided in **FP.5 Performance Assessment 1**.
-
-The camera-based TTC plot below shows the values:
+The camera-based TTC plot below shows the values in comparison to the LIDAR ttc estimations:
 
 ![FP.4 TTC Comparison Plot](analysis/output/fp4_ttc_comparison.png)
 
@@ -592,20 +594,11 @@ The scale distribution plots show the distance ratio statistics:
 
 The raw comparison data is available in [analysis/output/ttc_camera.csv](analysis/output/ttc_camera.csv) and [analysis/output/ttc_camera_scale_stats.csv](analysis/output/ttc_camera_scale_stats.csv) for further analysis.
 
-**Filtering Progression Across FP.1, FP.3, and FP.4:**
-The following comprehensive overlay illustrates how keypoint match filtering progresses through the pipeline stages:
-
-![Filtering Progression Overlay](analysis/output/fp3_match_filtering_progression.png)
-*Figure: Comparison of keypoint match counts for the tracked preceding vehicle across all pipeline stages. **Blue** shows FP.1 raw matches (77-102, mean 86.8) restricted only by source and target bounding boxes. **Orange** shows FP.3 matches after **displacement filtering** (upper threshold of 1/8 bounding box dimension) which removes large individual keypoint displacements that likely represent mismatches or unrealistic motion. **Green** shows FP.4 final matches (77-100, mean 86.1) used as input to camera TTC estimation. The red shaded area represents matches removed by the displacement threshold (total 14 matches, 0.9% reduction), demonstrating the reduction that improves TTC estimation robustness by removing outliers.*
-
-**New Data:** Filtering progression statistics are available in [analysis/output/filtering_progression.csv](analysis/output/filtering_progression.csv) with frame-by-frame counts for all three stages.
-
 To run the FP.4 analysis:
 ```bash
 # Enable statistics recording in FinalProject_Camera.cpp
 bRecordCameraTTC = true
 bRecordCameraScaleStats = true
-bRecordFilteringProgression = true  # Enable filtering progression data
 
 # Build and run the program
 cd build && make && ./3D_object_tracking
@@ -616,17 +609,7 @@ cd analysis && source .venv/bin/activate && python fp4_analysis.py
 # Or from any directory with explicit paths
 python analysis/fp4_analysis.py --camera-csv analysis/output/ttc_camera.csv \
   --lidar-csv analysis/output/ttc_lidar_comparison.csv \
-  --scale-csv analysis/output/ttc_camera_scale_stats.csv \
-  --progression-csv analysis/output/filtering_progression.csv
-```
-
-**To generate the filtering progression plot:**
-```bash
-# Run the dedicated analysis script
-python analysis/fp3_match_filtering_progression.py \
-  --fp1-csv analysis/output/bb_matches.csv \
-  --fp3-csv analysis/output/kpt_matches_filtering.csv \
-  --fp4-csv analysis/output/filtering_progression.csv
+  --scale-csv analysis/output/ttc_camera_scale_stats.csv
 ```
 
 **Parameter Configuration:**
