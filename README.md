@@ -682,60 +682,7 @@ Run multiple detector/descriptor combinations and examine the differences in TTC
 
 All detector/descriptor combinations implemented in the previous chapters have been compared frame-by-frame with respect to TTC estimations. To facilitate comparison, tables and diagrams should be used to represent the different TTC values.
 
-## **Implementation:**
-
 ## **Results:**
 
 ## **Analysis:**
 
-- **Keypoint Match Visualization:**
-
-The project includes optional keypoint match visualization for enhanced analysis:
-
-- **Function**: `showKeypointMatchesOverlay()` in `src/camFusion_Student.cpp`
-- **Enable/Disable**: Set `bShowKeypointMatches = true/false` in `src/FinalProject_Camera.cpp`
-- **Output**: Generates `keypoint_matches_<frame_index>.png` files in `analysis/output/`
-- **Features**: 
-  - Shows camera image with tracked vehicle bounding box (green)
-  - Draws current frame keypoints within the bounding box (green circles)
-  - Draws matched keypoints from previous frame (yellow circles)
-  - Draws connecting lines between matched keypoint pairs (red lines)
-  - Includes comprehensive legend with match counts and bounding box info
-- **Note**: First frame (frame 0) has no keypoint match image as it requires previous frame data
-
-**Visualization Example:**
-When enabled, each frame generates an image showing:
-- **Green bounding box**: The tracked preceding vehicle
-- **Green circles**: Current frame keypoints within the bounding box
-- **Yellow circles**: Previous frame keypoints that match current ones
-- **Red lines**: Connections between matched keypoint pairs
-- **Legend**: Match count, bounding box ID, track ID, and color coding
-
-
-# Appendix A
-
-The camera-based TTC estimation uses the **scale expansion** principle from optical flow. As an object moves toward the camera, its image size expands. The TTC can be computed from the rate of this expansion.
-
-**Derivation:**
-
-For a pair of matched keypoints (kp₁, kp₂) on the same rigid object:
-- Let dₜ = ||kp₁ₜ - kp₂ₜ|| be the Euclidean distance between them at frame t
-- Let dₜ₊₁ = ||kp₁ₜ₊₁ - kp₂ₜ₊₁|| be the distance at frame t+1
-- The scale ratio is: s = dₜ₊₁ / dₜ
-
-For an **approaching object**, the image expands, so dₜ₊₁ > dₜ, giving **s > 1**.
-
-The relationship between scale change and TTC is derived from perspective geometry:
-- The scale s is inversely related to distance Z from the camera: s = f/Z where f is focal length
-- As the object approaches, Z decreases, and s increases
-- For small Δt, the relative change in scale approximates: (s - 1) / Δt ≈ 1/TTC
-
-**Rearranging gives the TTC formula:**
-**TTC = -Δt / (1 - s)**
-
-Where Δt = 1/frameRate is the time between frames.
-
-The formula handles all three modes:
-- **s > 1.0**: Approaching object - image scale expands, TTC is positive
-- **s < 1.0**: Object moving away - image scale shrinks, formula gives negative TTC which we take absolute value of
-- **s == 1.0**: No scale change - TTC is undefined (division by zero), returns NaN
