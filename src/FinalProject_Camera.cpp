@@ -174,7 +174,7 @@ int main(int argc, const char *argv[])
     std::vector<CameraTTCResult> cameraTTCResults;
     bool bRecordCameraTTC = true; // Enable to record FP.4 camera TTC results
     
-    // For FP.4 debugging: Store distance ratio statistics to analyze background filtering
+    // For FP.4 debugging: Store distance ratio statistics
     struct CameraTTCScaleStats
     {
         int frameIndex;
@@ -185,7 +185,7 @@ int main(int argc, const char *argv[])
         double medianRatio;
         double meanRatio;
         double stddevRatio;
-        int numFiltered; // Number of ratios after background filtering
+        int numFiltered; // Number of ratios after minDist filtering
         double filteredMinRatio;
         double filteredMaxRatio;
         double filteredMedianRatio;

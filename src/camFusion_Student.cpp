@@ -82,7 +82,13 @@ void clusterLidarWithROI(std::vector<BoundingBox> &boundingBoxes, std::vector<Li
  * Note: Text output is tuned for 2000x2000 image size. For other sizes,
  * text positions should be adjusted proportionally.
  */
-void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait, int trackedPrecedingVehicleTrackID, int frameIndex, const std::string &dataPath)
+void show3DObjects(
+    std::vector<BoundingBox> &boundingBoxes,
+    cv::Size worldSize, cv::Size imageSize,
+    bool bWait,
+    int trackedPrecedingVehicleTrackID,
+    int frameIndex,
+    const std::string &dataPath)
 {
     // create topview image
     cv::Mat topviewImg(imageSize, CV_8UC3, cv::Scalar(255, 255, 255));
@@ -699,7 +705,7 @@ void computeTTCCamera(std::vector<cv::KeyPoint> &kptsPrev, std::vector<cv::KeyPo
         return;
     }
     
-    // Compute median distance ratio directly from all ratios (no background filtering)
+    // Compute median distance ratio directly from all pairwise keypoint distance ratios
     double medianDistRatio = computeMedian(distRatios);
     
     // Compute time-to-collision using the formula:

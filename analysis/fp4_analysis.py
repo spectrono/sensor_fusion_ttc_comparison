@@ -2,7 +2,7 @@
 """
 FP.4 Camera TTC Analysis Script
 
-Analyzes camera-based TTC estimation performance and the impact of background cluster filtering.
+Analyzes camera-based TTC estimation performance.
 Compares camera TTC with LIDAR TTC and visualizes scale ratio distributions.
 
 Usage:
@@ -394,116 +394,32 @@ def plot_scale_distributions(df_scale, output_dir=".", output_prefix="fp4_scale"
     return output_path
 
 
-def plot_filtering_impact(df_scale, output_dir=".", output_prefix="fp4_filtering"):
+def plot_keypoint_pair_filtering_pie(df_scale, output_dir="."):
     """
-    Visualize the impact of background filtering on scale ratios.
+    Generate standalone pie chart showing keypoint pair filtering impact.
     
     Args:
         df_scale: DataFrame with scale ratio statistics including num_ratios and num_filtered
         output_dir: Directory to save plots
-        output_prefix: Prefix for output filenames
     """
     os.makedirs(output_dir, exist_ok=True)
     
     # Filter by track_id to ensure we're analyzing the tracked preceding vehicle
-    # The track_id is read from the file written by the C++ program
     tracked_track_id = get_tracked_vehicle_track_id()
     
     if 'track_id' in df_scale.columns and tracked_track_id is not None:
-        # Use the track_id from the file
         track_data = df_scale[df_scale['track_id'] == tracked_track_id]
         if len(track_data) > 0:
             df_scale = track_data.copy()
-        else:
-            print(f"  Warning: track_id={tracked_track_id} not found in data, using all data")
-    elif 'track_id' in df_scale.columns:
-        # track_id file not found, fallback to most common track_id
-        track_ids = df_scale['track_id'].mode()
-        if len(track_ids) > 0:
-            track_id = track_ids[0]
-            df_scale = df_scale[df_scale['track_id'] == track_id].copy()
     
-    plt.figure(figsize=(16, 10))
-    sns.set_style("whitegrid")
-    
-    frames = df_scale['frame_index']
-    
-    # Plot 1: Number of ratios before and after filtering
-    plt.subplot(2, 2, 1)
-    
-    if 'num_ratios' in df_scale.columns and 'num_filtered' in df_scale.columns:
-        plt.bar(frames - 0.2, df_scale['num_ratios'], width=0.4, 
-                color='blue', alpha=0.7, label='Before Filtering')
-        plt.bar(frames + 0.2, df_scale['num_filtered'], width=0.4,
-                color='red', alpha=0.7, label='After Filtering')
-        plt.title('Number of Distance Ratios: Before vs After Filtering', fontsize=14)
-        plt.xlabel('Frame Index', fontsize=12)
-        plt.ylabel('Count', fontsize=12)
-        plt.legend(loc='best', fontsize=10)
-        plt.grid(True, alpha=0.3, axis='y')
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-    else:
-        plt.text(0.5, 0.5, 'Column data not available', 
-                 transform=plt.gca().transAxes, ha='center', va='center', fontsize=12)
-        plt.title('Number of Distance Ratios', fontsize=14)
-    
-    # Plot 2: Percentage removed per frame
-    plt.subplot(2, 2, 2)
-    
-    if 'num_ratios' in df_scale.columns and 'num_filtered' in df_scale.columns:
-        pct_removed = ((df_scale['num_ratios'] - df_scale['num_filtered']) / df_scale['num_ratios']) * 100
-        
-        bars = plt.bar(frames, pct_removed, color='purple', alpha=0.7)
-        
-        # Add value labels on bars
-        for bar in bars:
-            height = bar.get_height()
-            plt.text(bar.get_x() + bar.get_width()/2., height + 0.5,
-                     f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
-        
-        plt.title('Percentage of Ratios Removed by Filtering', fontsize=14)
-        plt.xlabel('Frame Index', fontsize=12)
-        plt.ylabel('Percentage Removed (%)', fontsize=12)
-        plt.axhline(y=0, color='black', linestyle='-', linewidth=1)
-        plt.grid(True, alpha=0.3, axis='y')
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-    else:
-        plt.text(0.5, 0.5, 'Column data not available', 
-                 transform=plt.gca().transAxes, ha='center', va='center', fontsize=12)
-        plt.title('Percentage Removed', fontsize=14)
-    
-    # Plot 3: Median ratio shift due to filtering
-    plt.subplot(2, 2, 3)
-    
-    if 'median_ratio' in df_scale.columns and 'filtered_median' in df_scale.columns:
-        median_shift = df_scale['filtered_median'] - df_scale['median_ratio']
-        
-        plt.bar(frames, median_shift, color='orange', alpha=0.7)
-        plt.axhline(y=0, color='black', linestyle='-', linewidth=1)
-        plt.title('Median Ratio Shift Due to Filtering', fontsize=14)
-        plt.xlabel('Frame Index', fontsize=12)
-        plt.ylabel('Shift (Filtered - Unfiltered)', fontsize=12)
-        plt.grid(True, alpha=0.3, axis='y')
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-    else:
-        plt.text(0.5, 0.5, 'Filtered median data not available', 
-                 transform=plt.gca().transAxes, ha='center', va='center', fontsize=12)
-        plt.title('Median Ratio Shift', fontsize=14)
-    
-    # Plot 4: Cumulative statistics - create as separate figure for README
-    # Save pie chart separately for use in README
     if 'num_ratios' in df_scale.columns and 'num_filtered' in df_scale.columns:
         total_before = df_scale['num_ratios'].sum()
         total_after = df_scale['num_filtered'].sum()
         total_removed = total_before - total_after
         pct_total_removed = (total_removed / total_before) * 100 if total_before > 0 else 0
         
-        # Create standalone pie chart figure
         plt.figure(figsize=(8, 8))
-        sizes = [total_before - total_removed, total_removed]
+        sizes = [total_after, total_removed]
         labels = [f'Kept: {total_after}\n({100-pct_total_removed:.1f}%)', 
                   f'Removed by minDist\n{total_removed} pairs ({pct_total_removed:.1f}%)']
         colors = ['green', 'red']
@@ -513,46 +429,14 @@ def plot_filtering_impact(df_scale, output_dir=".", output_prefix="fp4_filtering
         plt.title(f'Keypoint Pair Filtering by minDist=110.0\n{total_removed}/{total_before} pairs removed ({pct_total_removed:.1f}%)', 
                   fontsize=14, pad=20)
         
-        # Save standalone pie chart
-        pie_output_path = os.path.join(output_dir, "fp4_keypoint_pair_filtering_pie.png")
-        plt.savefig(pie_output_path, dpi=300, bbox_inches='tight')
+        output_path = os.path.join(output_dir, "fp4_keypoint_pair_filtering_pie.png")
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f"Saved keypoint pair filtering pie chart to: {pie_output_path}")
-    
-    # Plot 4: Cumulative statistics (as part of the 2x2 grid)
-    plt.subplot(2, 2, 4)
-    
-    if 'num_ratios' in df_scale.columns and 'num_filtered' in df_scale.columns:
-        total_before = df_scale['num_ratios'].sum()
-        total_after = df_scale['num_filtered'].sum()
-        total_removed = total_before - total_after
-        pct_total_removed = (total_removed / total_before) * 100 if total_before > 0 else 0
-        
-        sizes = [total_before - total_removed, total_removed]
-        labels = [f'Kept\n{total_after} ({100-pct_total_removed:.1f}%)', 
-                  f'Removed\n{total_removed} ({pct_total_removed:.1f}%)']
-        colors = ['green', 'red']
-        
-        plt.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%',
-                startangle=90, explode=(0, 0.1))
-        plt.title(f'Total Filtering Impact\n{total_removed}/{total_before} ratios removed', 
-                  fontsize=14)
+        print(f"Saved keypoint pair filtering pie chart to: {output_path}")
+        return output_path
     else:
-        plt.text(0.5, 0.5, 'Column data not available', 
-                 transform=plt.gca().transAxes, ha='center', va='center', fontsize=12)
-        plt.title('Total Filtering Impact', fontsize=14)
-    
-    plt.suptitle('FP.4: Background Filtering Impact Analysis', 
-                 fontsize=16, fontweight='bold', y=1.02)
-    plt.tight_layout()
-    
-    # Save plot
-    output_path = os.path.join(output_dir, f"{output_prefix}_impact.png")
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Saved filtering impact plot to: {output_path}")
-    return output_path
+        print("Warning: num_ratios or num_filtered columns not found in data")
+        return None
 
 
 def print_statistics(df_camera, df_lidar, df_scale):
@@ -670,7 +554,7 @@ def print_statistics(df_camera, df_lidar, df_scale):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='FP.4 Camera TTC Analysis - Compare camera TTC with LIDAR and analyze background filtering impact'
+        description='FP.4 Camera TTC Analysis - Compare camera TTC with LIDAR'
     )
     parser.add_argument('--camera-csv', type=str, 
                        default='output/ttc_camera.csv',
@@ -750,8 +634,8 @@ def main():
     # Plot 3: Scale distributions
     plot_scale_distributions(df_scale, args.output, "fp4_scale")
     
-    # Plot 4: Filtering impact
-    plot_filtering_impact(df_scale, args.output, "fp4_filtering")
+    # Plot 4: Keypoint pair filtering pie chart
+    plot_keypoint_pair_filtering_pie(df_scale, args.output)
     
     # Show plots if requested
     if args.show:
@@ -785,8 +669,8 @@ def main():
     print(f"  {os.path.abspath(args.output)}/fp4_ttc_comparison.png")
     print(f"  {os.path.abspath(args.output)}/fp4_correlation_scatter.png")
     print(f"  {os.path.abspath(args.output)}/fp4_scale_distributions.png")
-    print(f"  {os.path.abspath(args.output)}/fp4_filtering_impact.png")
-    print("\nUse these plots to evaluate the impact of background filtering on TTC estimation.")
+    print(f"  {os.path.abspath(args.output)}/fp4_keypoint_pair_filtering_pie.png")
+    print("\nUse these plots to evaluate camera TTC estimation.")
 
 
 if __name__ == '__main__':

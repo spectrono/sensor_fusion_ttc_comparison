@@ -232,7 +232,13 @@ void printBBMatchInfo(const std::map<int, int> &bbBestMatches, const DataFrame &
  * @param bWait Whether to wait for key press before continuing
  * @param trackedPrecedingVehicleTrackID Track ID of the preceding vehicle to highlight
  */
-void show3DObjects(std::vector<BoundingBox> &boundingBoxes, cv::Size worldSize, cv::Size imageSize, bool bWait, int trackedPrecedingVehicleTrackID, int frameIndex = -1, const std::string &dataPath = "");
+void show3DObjects(
+    std::vector<BoundingBox> &boundingBoxes,
+    cv::Size worldSize, cv::Size imageSize,
+    bool bWait,
+    int trackedPrecedingVehicleTrackID,
+    int frameIndex = -1,
+    const std::string &dataPath = "");
 
 /**
  * @brief Computes Time-to-Collision (TTC) based on camera keypoint correspondences
