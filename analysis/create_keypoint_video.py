@@ -18,7 +18,6 @@ Usage:
 """
 
 import argparse
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -89,7 +88,7 @@ def create_mp4_video(image_paths, output_path, fps=3, crf=23):
     ]
     
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"  ✓ MP4 created successfully")
         print(f"  Output: {output_path}")
         return True
@@ -124,7 +123,7 @@ def create_webm_video(image_paths, output_path, fps=3, crf=30):
     ]
     
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
         print(f"  ✓ WebM created successfully")
         print(f"  Output: {output_path}")
         return True
@@ -132,41 +131,6 @@ def create_webm_video(image_paths, output_path, fps=3, crf=30):
         print(f"  ✗ WebM creation failed:")
         print(f"  {e.stderr}")
         return False
-
-
-def create_gif_video(image_paths, output_path, fps=10):
-    """Create animated GIF using ffmpeg."""
-    print(f"Creating GIF: {output_path}")
-    
-    # Create a text file with the list of images
-    list_file = output_path.parent / "image_list_gif.txt"
-    with open(list_file, 'w') as f:
-        for path in image_paths:
-            f.write(f"file '{path}'\n")
-    
-    cmd = [
-        'ffmpeg',
-        '-y',
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', str(list_file),
-        '-vf', f'fps={fps},scale=trunc(iw/2)*2:trunc(ih/2)*2',
-        str(output_path)
-    ]
-    
-    try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(f"  ✓ GIF created successfully")
-        print(f"  Output: {output_path}")
-        return True
-    except subprocess.CalledProcessError as e:
-        print(f"  ✗ GIF creation failed:")
-        print(f"  {e.stderr}")
-        return False
-    finally:
-        if list_file.exists():
-            list_file.unlink()
-
 
 
 def check_ffmpeg():
@@ -264,9 +228,6 @@ def main():
     print(f"    <source src=\"{args.prefix}_video.webm\" type=\"video/webm\">")
     print(f"    Your browser does not support the video tag.")
     print(f"  </video>")
-    
-    print(f"\nFor GIF (simpler but larger):")
-    print(f"  <img src=\"{args.prefix}_video.gif\" alt=\"Keypoint Matches Animation\">")
 
 
 if __name__ == '__main__':

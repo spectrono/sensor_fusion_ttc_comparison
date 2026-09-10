@@ -9,7 +9,6 @@ Compares match counts before and after filtering, and examines distance distribu
 import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 import numpy as np
 import os
 
@@ -276,8 +275,6 @@ def main():
                        help='Path to keypoint match displacement filtering CSV file (default: output/kpt_matches_filtering.csv)')
     parser.add_argument('--output', type=str, default='fp3_kpt',
                        help='Output prefix for plots (default: fp3_kpt, saves to output/fp3_kpt_displacement_comparison.png)')
-    parser.add_argument('--show', action='store_true',
-                       help='Show plots interactively')
     args = parser.parse_args()
     
     # Load data
@@ -293,9 +290,6 @@ def main():
     
     # Generate plots
     plot_path = plot_comparison(df, args.output)
-    
-    if args.show:
-        plt.show()
     
     print(f"\nAnalysis complete!")
     print(f"Plots saved to: {plot_path}")

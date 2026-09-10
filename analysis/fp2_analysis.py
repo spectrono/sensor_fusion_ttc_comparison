@@ -11,7 +11,6 @@ import argparse
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import numpy as np
 import os
 
 
@@ -280,8 +279,6 @@ def main():
                        help='Path to TTC comparison CSV file (default: output/ttc_lidar_comparison.csv)')
     parser.add_argument('--output', type=str, default='fp2_ttc',
                        help='Output prefix for plots (default: fp2_ttc, saves to output/fp2_ttc_comparison.png)')
-    parser.add_argument('--show', action='store_true',
-                       help='Show plots interactively')
     args = parser.parse_args()
     
     # Define method order
@@ -303,51 +300,6 @@ def main():
     
     # Generate plots
     plot_path = plot_ttc_comparison(df, args.output)
-    
-    if args.show:
-        # Display plots
-        plt.figure(figsize=(16, 12))
-        plt.suptitle('FP.2: Lidar TTC Method Comparison', fontsize=16, fontweight='bold')
-        
-        # Filter for preceding vehicle using track_id from file
-        tracked_track_id = get_tracked_vehicle_track_id()
-        
-        if 'track_id' in df.columns and tracked_track_id is not None:
-            # Use the track_id from the file
-            track_data = df[df['track_id'] == tracked_track_id]
-            if len(track_data) > 0:
-                df_preceding = track_data.copy()
-            else:
-                print(f"  Warning: track_id={tracked_track_id} not found in data, using all data")
-                df_preceding = df.copy()
-        elif 'track_id' in df.columns:
-            # track_id file not found, fallback to most common track_id
-            track_ids = df['track_id'].mode()
-            if len(track_ids) > 0:
-                df_preceding = df[df['track_id'] == track_ids[0]].copy()
-            else:
-                df_preceding = df.copy()
-        else:
-            df_preceding = df[df['curr_box_id'] == 0].copy()
-            if len(df_preceding) == 0:
-                df_preceding = df.copy()
-        
-        plt.subplot(2, 2, 1)
-        for method in method_order:
-            if method in df_preceding.columns:
-                method_data = df_preceding.dropna(subset=[method])
-                plt.plot(method_data['frame_index'], method_data[method], 
-                        'o-', label=method, linewidth=2, markersize=4)
-        plt.title('TTC Over Frames')
-        plt.xlabel('Frame Index')
-        plt.ylabel('TTC (seconds)')
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-        ax = plt.gca()
-        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
-        
-        plt.tight_layout()
-        plt.show()
     
     print(f"\nAnalysis complete!")
     print(f"Plots saved to: {plot_path}")

@@ -25,7 +25,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
-import seaborn as sns
 
 
 # =============================================================================
@@ -293,7 +292,7 @@ def plot_smoothness_ranking(smoothness_df, output_dir):
     # Plot 1: Smoothness score
     ax1 = axes[0, 0]
     colors = plt.cm.RdYlGn(np.linspace(0.2, 0.9, len(df_sorted)))
-    bars = ax1.barh(range(len(df_sorted)), df_sorted['smoothness_score'], color=colors)
+    ax1.barh(range(len(df_sorted)), df_sorted['smoothness_score'], color=colors)
     ax1.set_yticks(range(len(df_sorted)))
     ax1.set_yticklabels(labels, fontsize=8)
     ax1.set_xlabel('Smoothness Score (1/(1+mean_change))', fontsize=11)
@@ -572,7 +571,7 @@ def plot_outlier_frames_detail(df, df_lidar, frame_outliers, output_dir):
         valid_mask = ~np.isnan(ttcs)
         
         colors = plt.cm.coolwarm(np.linspace(0, 1, len(frame_data)))
-        bars = ax.barh(range(len(frame_data)), 
+        ax.barh(range(len(frame_data)), 
                        [t if not np.isnan(t) else 0 for t in ttcs], 
                        color=colors, alpha=0.8)
         

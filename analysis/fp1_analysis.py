@@ -265,7 +265,7 @@ def main():
         args.output, 
         args.detector, 
         args.descriptor,
-        show=args.show if hasattr(args, 'show') else not args.no_show
+        show=not args.no_show
     )
     
     if df is not None:

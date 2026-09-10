@@ -240,7 +240,7 @@ def plot_correlation_scatter(df, output_dir=".", output_prefix="fp4_correlation"
     sns.set_style("whitegrid")
     
     # Scatter plot
-    scatter = sns.scatterplot(
+    sns.scatterplot(
         data=df_clean,
         x='ttc_lidar',
         y='ttc_camera',
@@ -641,16 +641,12 @@ def main():
     if args.show:
         print("\nDisplaying plots interactively...")
         
-        # Re-generate and show plots
-        plot_ttc_comparison(df_merged, args.output, "fp4_ttc")
-        df_merged_for_display = df_merged.copy()
-        
         # For display, create the plot but don't close it
         plt.figure(figsize=(14, 7))
         sns.set_style("whitegrid")
-        sns.lineplot(data=df_merged_for_display, x='frame_index', y='ttc_camera', 
+        sns.lineplot(data=df_merged, x='frame_index', y='ttc_camera', 
                      label='Camera TTC', marker='o', markersize=8, linewidth=2.5, color='#1f77b4')
-        sns.lineplot(data=df_merged_for_display, x='frame_index', y='ttc_lidar', 
+        sns.lineplot(data=df_merged, x='frame_index', y='ttc_lidar', 
                      label='LIDAR TTC', marker='s', markersize=8, linewidth=2.5, color='#ff7f0e')
         plt.title('FP.4: Camera vs LIDAR TTC Comparison', fontsize=16, pad=20)
         plt.xlabel('Frame Index', fontsize=14)

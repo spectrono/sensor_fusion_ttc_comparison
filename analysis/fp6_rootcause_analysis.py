@@ -33,8 +33,6 @@ import matplotlib.pyplot as plt
 
 # TTC becomes NaN when fewer than this many valid distance-ratio pairs are available
 MIN_PAIRS_FOR_TTC = 5
-# cameraMinDist threshold used by the C++ pipeline (pixels)
-CAMERA_MIN_DIST = 110.0
 
 
 def load_combo(csv_path):
