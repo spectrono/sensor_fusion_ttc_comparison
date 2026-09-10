@@ -343,6 +343,8 @@ def main():
         plt.ylabel('TTC (seconds)')
         plt.grid(True, alpha=0.3)
         plt.legend()
+        ax = plt.gca()
+        ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
         
         plt.tight_layout()
         plt.show()

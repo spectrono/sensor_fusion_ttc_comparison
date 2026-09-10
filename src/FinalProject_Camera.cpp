@@ -97,7 +97,10 @@ int main(int argc, const char *argv[])
 
     // Comprehensive testing mode: test all detector-descriptor combinations
     bool bTestAllCombinations = false;
-    
+
+    // FP.6: Run full TTC pipeline for all detector/descriptor combinations
+    bool bTestAllCombinationsTTC = true;
+
     // For comprehensive testing: store results for each combination
     struct CombinationResult {
         string detectorType;
@@ -109,6 +112,20 @@ int main(int argc, const char *argv[])
         double descriptorTimeMs;
     };
     std::vector<CombinationResult> combinationResults;
+
+    // FP.6: Store per-combination camera TTC results
+    struct CombinationTTCResult {
+        std::string detectorType;
+        std::string descriptorType;
+        int frameIndex;
+        int trackId;
+        int keypointCount;      // Total keypoints detected
+        int matchCount;         // Matched keypoints in tracked vehicle BB
+        int filteredMatchCount; // After displacement filtering
+        int numPairs;          // Pairwise distance ratios (after minDist filter)
+        double ttcCamera;
+    };
+    std::vector<CombinationTTCResult> combinationTTCResults;
     
     // For FP.1 analysis: store bounding box match data
     struct BBMatchData {
@@ -928,6 +945,135 @@ int main(int argc, const char *argv[])
 
                 } // eof TTC computation for tracked preceding vehicle            
 
+                // FP.6: Test all detector/descriptor combinations for camera TTC
+                if (bTestAllCombinationsTTC && trackedPrecedingVehicleTrackID >= 0 && 
+                    trackedPrecedingVehicleBoxID != -1 && prevBB != nullptr && currBB != nullptr)
+                {
+                    // Get grayscale images for both frames
+                    cv::Mat imgGrayPrev, imgGrayCurr;
+                    cv::cvtColor((dataBuffer.end() - 2)->cameraImg, imgGrayPrev, cv::COLOR_BGR2GRAY);
+                    cv::cvtColor((dataBuffer.end() - 1)->cameraImg, imgGrayCurr, cv::COLOR_BGR2GRAY);
+
+                    for (const auto& detectorType : allDetectorTypes)
+                    {
+                        for (const auto& descriptorType : allDescriptorTypes)
+                        {
+                            // Detect keypoints in both frames
+                            std::vector<cv::KeyPoint> kptsPrev, kptsCurr;
+                            detectKeypoints(kptsPrev, imgGrayPrev, detectorType, false);
+                            detectKeypoints(kptsCurr, imgGrayCurr, detectorType, false);
+
+                            // Extract descriptors
+                            cv::Mat descPrev, descCurr;
+                            desc::descKeypoints(kptsPrev, imgGrayPrev, descPrev, descriptorType, false);
+                            desc::descKeypoints(kptsCurr, imgGrayCurr, descCurr, descriptorType, false);
+
+                            // Match descriptors
+                            std::vector<cv::DMatch> matches;
+                            // SIFT produces float descriptors (DES_HOG), others are binary (DES_BINARY)
+                            std::string descCategory = (descriptorType == "SIFT") ? "DES_HOG" : "DES_BINARY";
+                            match::matchDescriptors(kptsPrev, kptsCurr, descPrev, descCurr,
+                                                   matches, descCategory, "MAT_BF", "SEL_NN", 0.8f);
+
+                            // Get matches for the tracked vehicle's BB pair
+                            std::vector<cv::DMatch> pairedMatches = getKptMatchesForBBPair(
+                                *prevBB, *currBB, kptsPrev, kptsCurr, matches);
+
+                            // Apply displacement filtering
+                            std::vector<cv::DMatch> filteredMatches = filterMatchesByDisplacement(
+                                pairedMatches, kptsPrev, kptsCurr, currBB, -1.0);
+
+                            // Compute TTC
+                            double ttc;
+                            computeTTCCamera(kptsPrev, kptsCurr, filteredMatches,
+                                           sensorFrameRate, cameraMinDist, ttc);
+
+                            // Count pairwise distance ratios (for diagnostics)
+                            // FP.6 root-cause example overlays: capture the distance ratios for the
+                            // selected example combinations so they can be plotted later.
+                            int currentFrameIndex = imgStartIndex + imgIndex;
+                            static const std::vector<std::tuple<std::string, std::string, int, std::string, std::string>> rootCauseTargets = {
+                                {"HARRIS", "SIFT",  8,  "RC1 Keypoint distribution sensitivity", "rc1_harris_sift_f8"},
+                                {"HARRIS", "BRIEF", 2,  "RC2 Insufficient keypoint pairs",        "rc2_harris_brief_f2"},
+                                {"ORB",    "FREAK", 14, "RC3 Descriptor mismatch",              "rc3_orb_freak_f14"},
+                                {"HARRIS", "BRIEF", 1,  "RC4 Frame-specific keypoint availability", "rc4_harris_brief_f1"},
+                            };
+                            bool isRootCauseTarget = false;
+                            std::string rcTitle, rcTag;
+                            for (const auto &t : rootCauseTargets)
+                            {
+                                if (std::get<0>(t) == detectorType && std::get<1>(t) == descriptorType && std::get<2>(t) == currentFrameIndex)
+                                {
+                                    isRootCauseTarget = true;
+                                    rcTitle = std::get<3>(t);
+                                    rcTag = std::get<4>(t);
+                                    break;
+                                }
+                            }
+
+                            int numPairs = 0;
+                            std::vector<double> rcRatios;
+                            for (auto it1 = filteredMatches.begin(); it1 != filteredMatches.end() - 1; ++it1)
+                            {
+                                const cv::KeyPoint &kpOuterCurr = kptsCurr.at(it1->trainIdx);
+                                const cv::KeyPoint &kpOuterPrev = kptsPrev.at(it1->queryIdx);
+                                for (auto it2 = it1 + 1; it2 != filteredMatches.end(); ++it2)
+                                {
+                                    const cv::KeyPoint &kpInnerCurr = kptsCurr.at(it2->trainIdx);
+                                    const cv::KeyPoint &kpInnerPrev = kptsPrev.at(it2->queryIdx);
+                                    double distCurr = cv::norm(kpOuterCurr.pt - kpInnerCurr.pt);
+                                    double distPrev = cv::norm(kpOuterPrev.pt - kpInnerPrev.pt);
+                                    if (distPrev > std::numeric_limits<double>::epsilon() &&
+                                        distCurr >= cameraMinDist && distPrev >= cameraMinDist)
+                                    {
+                                        numPairs++;
+                                        if (isRootCauseTarget)
+                                        {
+                                            rcRatios.push_back(distCurr / distPrev);
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (isRootCauseTarget)
+                            {
+                                std::string outDir = dataPath + "analysis/output/";
+                                showRootCauseKeypointOverlay((dataBuffer.end() - 1)->cameraImg,
+                                    kptsPrev, kptsCurr, filteredMatches,
+                                    *prevBB, *currBB, detectorType, descriptorType,
+                                    ttc, numPairs, static_cast<int>(kptsCurr.size()),
+                                    currentFrameIndex, rcTitle, rcTag, outDir, false);
+
+                                // Persist the per-pair distance ratios for histogram plotting.
+                                std::string ratiosFile = outDir + "rootcause_ratios_" + rcTag + ".csv";
+                                std::ofstream rf(ratiosFile);
+                                if (rf.is_open())
+                                {
+                                    rf << "ratio\n";
+                                    rf << std::fixed << std::setprecision(6);
+                                    for (double r : rcRatios)
+                                    {
+                                        rf << r << "\n";
+                                    }
+                                    rf.close();
+                                }
+                            }
+
+                            CombinationTTCResult result;
+                            result.detectorType = detectorType;
+                            result.descriptorType = descriptorType;
+                            result.frameIndex = imgStartIndex + imgIndex;
+                            result.trackId = trackedPrecedingVehicleTrackID;
+                            result.keypointCount = static_cast<int>(kptsCurr.size());
+                            result.matchCount = static_cast<int>(pairedMatches.size());
+                            result.filteredMatchCount = static_cast<int>(filteredMatches.size());
+                            result.numPairs = numPairs;
+                            result.ttcCamera = ttc;
+                            combinationTTCResults.push_back(result);
+                        }
+                    }
+                }
+
         }
 
     } // eof loop over all images
@@ -963,6 +1109,49 @@ int main(int argc, const char *argv[])
             std::cout << "Total combinations tested: " << combinationResults.size() << std::endl;
             std::cout << "(7 detectors x 5 descriptors x " << (imgEndIndex - imgStartIndex + 1) << " images = " 
                       << combinationResults.size() << " results)" << std::endl;
+        }
+        else
+        {
+            std::cerr << "Error: Could not open " << csvFilename << " for writing" << std::endl;
+        }
+    }
+
+    // Save FP.6 combination TTC results to CSV for Python analysis
+    if (bTestAllCombinationsTTC && !combinationTTCResults.empty())
+    {
+        std::string csvFilename = dataPath + "analysis/output/ttc_camera_combinations.csv";
+        std::ofstream csvFile(csvFilename);
+
+        if (csvFile.is_open())
+        {
+            csvFile << "detector,descriptor,frame_index,track_id,keypoint_count,match_count,filtered_match_count,num_pairs,ttc_camera\n";
+
+            for (const auto& result : combinationTTCResults)
+            {
+                csvFile << result.detectorType << ","
+                        << result.descriptorType << ","
+                        << result.frameIndex << ","
+                        << result.trackId << ","
+                        << result.keypointCount << ","
+                        << result.matchCount << ","
+                        << result.filteredMatchCount << ","
+                        << result.numPairs << ",";
+
+                if (std::isnan(result.ttcCamera))
+                {
+                    csvFile << "nan";
+                }
+                else
+                {
+                    csvFile << std::fixed << std::setprecision(4) << result.ttcCamera;
+                }
+                csvFile << "\n";
+            }
+
+            csvFile.close();
+            std::cout << "\nFP.6 Combination TTC results saved to " << csvFilename << std::endl;
+            std::cout << "Total records: " << combinationTTCResults.size() << std::endl;
+            std::cout << "Use: python analysis/fp6_analysis.py" << std::endl;
         }
         else
         {

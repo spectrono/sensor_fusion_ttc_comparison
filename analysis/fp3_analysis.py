@@ -101,6 +101,8 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     plt.ylabel('Number of Matches')
     plt.grid(True, alpha=0.3)
     plt.legend(loc='best')
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     
     # Plot 2: Outlier removal percentage
     plt.subplot(2, 2, 2)
@@ -111,6 +113,8 @@ def plot_comparison(df, output_prefix="fp3_kpt"):
     plt.ylabel('Percentage Removed (%)')
     plt.grid(True, alpha=0.3)
     plt.legend(loc='best')
+    ax = plt.gca()
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
     
     # Compute global y-axis limits for consistent scaling between subplots
     global_y_min = 0

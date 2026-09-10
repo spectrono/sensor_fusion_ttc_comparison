@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <numeric>
 #include <cmath>
+#include <sstream>
 #include <opencv2/highgui/highgui.hpp>
 #include <opencv2/imgproc/imgproc.hpp>
 
@@ -1393,6 +1394,117 @@ void showKeypointMatchesOverlay(
         cv::namedWindow(windowName, cv::WINDOW_NORMAL);
         cv::imshow(windowName, visImg);
         cv::waitKey(10); // Short wait for visualization
+    }
+}
+
+
+/**
+ * @brief Visualizes keypoint matches for a specific detector/descriptor root-cause example
+ *
+ * Draws both the previous and current bounding boxes, the matched keypoint pairs within
+ * them (with connecting lines), and an annotated info panel (detector/descriptor, frame,
+ * TTC, matches, valid pairs, keypoint count). Used by the FP.6 root-cause analysis to
+ * illustrate the four outlier mechanisms.
+ *
+ * @param img Current camera image (drawn on a clone)
+ * @param kptsPrev Keypoints from the previous frame
+ * @param kptsCurr Keypoints from the current frame
+ * @param kptMatches Filtered keypoint matches used for TTC (within the BB pair)
+ * @param prevBB Previous frame bounding box of the tracked vehicle
+ * @param currBB Current frame bounding box of the tracked vehicle
+ * @param detectorType Detector name (e.g. "HARRIS")
+ * @param descriptorType Descriptor name (e.g. "BRIEF")
+ * @param ttc Computed camera TTC (may be NaN)
+ * @param numPairs Number of valid pairwise distance ratios
+ * @param keypointCount Number of keypoints detected in the current frame
+ * @param frameIndex Current frame index
+ * @param title Annotation title (e.g. "RC1 Keypoint distribution sensitivity")
+ * @param tag Filename tag (e.g. "rc1_harris_sift_f8")
+ * @param dataPath Path to save the output image (empty disables saving)
+ * @param bVis Enable on-screen display
+ */
+void showRootCauseKeypointOverlay(
+    cv::Mat &img,
+    const std::vector<cv::KeyPoint> &kptsPrev,
+    const std::vector<cv::KeyPoint> &kptsCurr,
+    const std::vector<cv::DMatch> &kptMatches,
+    const BoundingBox &prevBB,
+    const BoundingBox &currBB,
+    const std::string &detectorType,
+    const std::string &descriptorType,
+    double ttc,
+    int numPairs,
+    int keypointCount,
+    int frameIndex,
+    const std::string &title,
+    const std::string &tag,
+    const std::string &dataPath,
+    bool bVis)
+{
+    cv::Mat visImg = img.clone();
+
+    // Bounding boxes: previous (orange) and current (green)
+    cv::Scalar colorPrev(0, 165, 255);   // orange (BGR)
+    cv::Scalar colorCurr(0, 255, 0);     // green
+    cv::rectangle(visImg, prevBB.roi, colorPrev, 2, cv::LINE_AA);
+    cv::rectangle(visImg, currBB.roi, colorCurr, 2, cv::LINE_AA);
+
+    // Matched keypoint pairs within the bounding box, with connecting lines
+    int kpRadius = 4;
+    int matchedCount = 0;
+    for (const auto &match : kptMatches)
+    {
+        const cv::KeyPoint &prevKp = kptsPrev[match.queryIdx];
+        const cv::KeyPoint &currKp = kptsCurr[match.trainIdx];
+        cv::line(visImg, prevKp.pt, currKp.pt, cv::Scalar(0, 200, 255), 1, cv::LINE_AA);
+        cv::circle(visImg, prevKp.pt, kpRadius, colorPrev, -1, cv::LINE_AA);
+        cv::circle(visImg, currKp.pt, kpRadius, colorCurr, -1, cv::LINE_AA);
+        ++matchedCount;
+    }
+
+    // Info panel (top-left)
+    cv::Scalar panelBg(0, 0, 0);
+    cv::Scalar panelText(255, 255, 255);
+    cv::Scalar accent(0, 255, 255); // yellow accent
+    int panelX = 12, panelY = 12;
+    int panelW = 430, panelH = 150;
+    cv::rectangle(visImg, cv::Point(panelX, panelY), cv::Point(panelX + panelW, panelY + panelH), panelBg, -1);
+
+    std::ostringstream oss;
+    oss << detectorType << "/" << descriptorType << "  (frame " << frameIndex << ")";
+    cv::putText(visImg, title, cv::Point(panelX + 10, panelY + 22), cv::FONT_HERSHEY_SIMPLEX, 0.6, accent, 1, cv::LINE_AA);
+    cv::putText(visImg, oss.str(), cv::Point(panelX + 10, panelY + 48), cv::FONT_HERSHEY_SIMPLEX, 0.6, panelText, 1, cv::LINE_AA);
+
+    std::string ttcStr = std::isnan(ttc) ? std::string("NaN") : cv::format("%.2f s", ttc);
+    cv::putText(visImg, cv::format("TTC: %s", ttcStr.c_str()), cv::Point(panelX + 10, panelY + 74),
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, panelText, 1, cv::LINE_AA);
+    cv::putText(visImg, cv::format("Matches in BB: %d", matchedCount), cv::Point(panelX + 10, panelY + 100),
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, panelText, 1, cv::LINE_AA);
+    cv::putText(visImg, cv::format("Valid distance-ratio pairs: %d", numPairs), cv::Point(panelX + 10, panelY + 126),
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, panelText, 1, cv::LINE_AA);
+    cv::putText(visImg, cv::format("Keypoints (curr frame): %d", keypointCount), cv::Point(panelX + 230, panelY + 126),
+               cv::FONT_HERSHEY_SIMPLEX, 0.6, panelText, 1, cv::LINE_AA);
+
+    // BB legend (bottom-left)
+    int legY = visImg.rows - 24;
+    cv::rectangle(visImg, cv::Point(12, legY - 8), cv::Point(24, legY + 4), colorPrev, -1);
+    cv::putText(visImg, "previous BB", cv::Point(30, legY), cv::FONT_HERSHEY_SIMPLEX, 0.5, panelText, 1, cv::LINE_AA);
+    cv::rectangle(visImg, cv::Point(150, legY - 8), cv::Point(162, legY + 4), colorCurr, -1);
+    cv::putText(visImg, "current BB", cv::Point(168, legY), cv::FONT_HERSHEY_SIMPLEX, 0.5, panelText, 1, cv::LINE_AA);
+
+    if (!dataPath.empty())
+    {
+        std::string filename = dataPath + "rootcause_" + tag + ".png";
+        cv::imwrite(filename, visImg);
+        std::cout << "Saved root-cause overlay: " << filename << std::endl;
+    }
+
+    if (bVis)
+    {
+        std::string windowName = "Root-Cause Overlay - " + tag;
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::imshow(windowName, visImg);
+        cv::waitKey(10);
     }
 }
 

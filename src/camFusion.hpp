@@ -315,6 +315,48 @@ void showKeypointMatchesOverlay(
     bool bVis = true);
 
 /**
+ * @brief Visualizes keypoint matches for a specific detector/descriptor root-cause example
+ *
+ * Draws both bounding boxes, the matched keypoint pairs (with connecting lines), and an
+ * annotated info panel. Used by the FP.6 root-cause analysis to illustrate outlier
+ * mechanisms for individual detector/descriptor combinations.
+ *
+ * @param img Current camera image (drawn on a clone)
+ * @param kptsPrev Keypoints from the previous frame
+ * @param kptsCurr Keypoints from the current frame
+ * @param kptMatches Filtered keypoint matches used for TTC (within the BB pair)
+ * @param prevBB Previous frame bounding box of the tracked vehicle
+ * @param currBB Current frame bounding box of the tracked vehicle
+ * @param detectorType Detector name
+ * @param descriptorType Descriptor name
+ * @param ttc Computed camera TTC (may be NaN)
+ * @param numPairs Number of valid pairwise distance ratios
+ * @param keypointCount Number of keypoints detected in the current frame
+ * @param frameIndex Current frame index
+ * @param title Annotation title
+ * @param tag Filename tag
+ * @param dataPath Path to save the output image (empty disables saving)
+ * @param bVis Enable on-screen display
+ */
+void showRootCauseKeypointOverlay(
+    cv::Mat &img,
+    const std::vector<cv::KeyPoint> &kptsPrev,
+    const std::vector<cv::KeyPoint> &kptsCurr,
+    const std::vector<cv::DMatch> &kptMatches,
+    const BoundingBox &prevBB,
+    const BoundingBox &currBB,
+    const std::string &detectorType,
+    const std::string &descriptorType,
+    double ttc,
+    int numPairs,
+    int keypointCount,
+    int frameIndex,
+    const std::string &title,
+    const std::string &tag,
+    const std::string &dataPath,
+    bool bVis);
+
+/**
  * @brief Visualizes all bounding boxes on the camera image
  * 
  * Draws all detected bounding boxes on the camera image for documentation purposes.

@@ -682,7 +682,153 @@ Run multiple detector/descriptor combinations and examine the differences in TTC
 
 All detector/descriptor combinations implemented in the previous chapters have been compared frame-by-frame with respect to TTC estimations. To facilitate comparison, tables and diagrams should be used to represent the different TTC values.
 
+## **Implementation:**
+
+- Added `bTestAllCombinationsTTC` flag in `src/FinalProject_Camera.cpp` (enabled by default and it takes some time until all combinations are evaluated)
+- When enabled, the full camera TTC pipeline (detect → describe → match → filter → compute TTC) is run for every detector/descriptor combination on every frame
+- Results are exported to `analysis/output/ttc_camera_combinations.csv` with columns: `detector, descriptor, frame_index, track_id, keypoint_count, match_count, filtered_match_count, num_pairs, ttc_camera`
+- Created Python analysis script `analysis/fp6_analysis.py` that evaluates all 35 combinations (7 detectors x 5 descriptors) across 18 frames
+- Analysis uses **TTC curve smoothness** (frame-to-frame consistency) and **largest outliers** (deviation from cross-combination median) as the main evaluation criteria
+
+The C++ code runs the full pipeline for each combination after the main tracking pipeline has established the preceding vehicle's bounding box. This ensures that each combination uses the same bounding box pair (same tracked vehicle) so that differences in TTC are purely due to the detector/descriptor choice, not tracking differences.
+
 ## **Results:**
 
+All 35 detector/descriptor combinations were tested across 18 frames (630 total records, 604 valid TTC values). The analysis evaluates combinations by two criteria:
+
+1. **Smoothness**: Mean absolute frame-to-frame TTC change (lower = smoother, more consistent)
+2. **Outliers**: Frames where a combination's TTC deviates significantly from the cross-combination median
+
+**Smoothness Ranking (Top 5 best / Top 5 worst):**
+
+| Rank | Detector | Descriptor | Mean TTC | Std Dev | Mean Change | Valid | Smoothness |
+|------|----------|------------|----------|---------|-------------|-------|------------|
+| 1 | SHITOMASI | AKAZE | 12.23s | 1.36s | 0.77s | 18/18 | 0.565 |
+| 2 | SHITOMASI | BRIEF | 12.08s | 1.61s | 0.85s | 18/18 | 0.541 |
+| 3 | AKAZE | FREAK | 12.36s | 2.40s | 0.99s | 18/18 | 0.502 |
+| 4 | SIFT | BRIEF | 11.38s | 2.26s | 1.07s | 18/18 | 0.482 |
+| 5 | SHITOMASI | FREAK | 12.44s | 1.33s | 1.08s | 18/18 | 0.482 |
+| 31 | HARRIS | SIFT | 15.92s | 15.63s | 9.95s | 15/18 | 0.091 |
+| 32 | HARRIS | FREAK | 24.14s | 24.46s | 10.10s | 14/18 | 0.090 |
+| 33 | ORB | SIFT | 18.59s | 15.53s | 16.17s | 17/18 | 0.058 |
+| 34 | ORB | FREAK | 20.57s | 15.29s | 19.11s | 15/18 | 0.050 |
+| 35 | HARRIS | BRIEF | 23.75s | 25.99s | 19.14s | 16/18 | 0.050 |
+
+The overview plot shows all 35 combinations' TTC over frames with the lidar reference:
+
+![FP.6 TTC Overview](analysis/output/fp6_ttc_overview.png)
+*Figure: Top: All 35 detector/descriptor combinations plotted together with Lidar UNFILTERED reference (black). Bottom: Per-detector breakdown showing each descriptor variant. The SHITOMASI and SIFT detector families produce the most consistent TTC curves, while HARRIS and ORB produce extreme outliers in several frames.*
+
+The smoothness ranking plot shows all four metrics side by side:
+
+![FP.6 Smoothness Ranking](analysis/output/fp6_smoothness_ranking.png)
+*Figure: Smoothness metrics for all 35 combinations. Top-left: Smoothness score (higher = better). Top-right: Mean frame-to-frame change (lower = better). Bottom-left: TTC std dev (lower = better). Bottom-right: Number of valid TTC values (higher = more robust).*
+
+**Largest Outlier Frames (highest TTC spread across combinations):**
+
+| Frame | TTC Spread | Min TTC | Max TTC | Median TTC | Std Dev |
+|-------|------------|---------|---------|------------|---------|
+| 2 | 84.0s | 10.1s | 94.0s | 14.4s | 21.8s |
+| 4 | 74.9s | 11.3s | 86.3s | 14.8s | 16.9s |
+| 8 | 65.1s | 8.5s | 73.6s | 13.9s | 12.9s |
+| 15 | 55.2s | 8.6s | 63.8s | 11.1s | 9.1s |
+| 14 | 46.8s | 7.4s | 54.2s | 11.8s | 7.5s |
+
+The outlier analysis plot visualizes these patterns:
+
+![FP.6 Outlier Analysis](analysis/output/fp6_outlier_analysis.png)
+*Figure: Top-left: TTC spread per frame across all combinations. Top-right: Top 15 combination-frame outliers by absolute deviation from frame median. Bottom-left: Outlier count per combination. Bottom-right: TTC range (max - min) per combination.*
+
+The top 3 outlier frames shown in detail:
+
+![FP.6 Outlier Frames Detail](analysis/output/fp6_outlier_frames_detail.png)
+*Figure: Top 3 frames with largest TTC spread. Each bar shows one combination's TTC for that frame. Green dotted line = cross-combination median, red dashed line = Lidar reference. Frames 2 and 4 show HARRIS combinations producing TTC values up to 94s (vs median ~14s).*
+
+The best vs worst combinations side by side:
+
+![FP.6 Top Combinations](analysis/output/fp6_top_combinations.png)
+*Figure: Top row: 3 best combinations by smoothness score (SHITOMASI/AKAZE, SHITOMASI/BRIEF, AKAZE/FREAK). Bottom row: 3 worst combinations (HARRIS/BRIEF, ORB/FREAK, ORB/SIFT). The best combinations track the lidar reference closely, while the worst produce extreme spikes.*
+
+The full statistics table for all 35 combinations:
+
+![FP.6 Statistics Table](analysis/output/fp6_statistics_table.png)
+*Figure: Complete statistics table for all 35 detector/descriptor combinations, sorted by smoothness score. Green rows = top 3, red rows = bottom 3.*
+
+The raw comparison data is available in [analysis/output/ttc_camera_combinations.csv](analysis/output/ttc_camera_combinations.csv) and [analysis/output/fp6_smoothness_metrics.csv](analysis/output/fp6_smoothness_metrics.csv).
+
 ## **Analysis:**
+
+**Best-performing combinations:**
+
+The SHITOMASI detector family consistently produces the smoothest TTC curves across all descriptors. SHITOMASI/AKAZE ranks first with a smoothness score of 0.565 (mean frame-to-frame change of 0.77s), followed by SHITOMASI/BRIEF (0.541) and SHITOMASI/FREAK (0.482). All SHITOMASI combinations produce valid TTC values for all 18 frames (18/18), demonstrating robustness. The SIFT detector family also performs well, with SIFT/BRIEF ranking 4th (0.482) and all SIFT combinations achieving 18/18 valid frames. The AKAZE detector shows good performance across descriptors, with AKAZE/FREAK ranking 3rd (0.502).
+
+**Worst-performing combinations:**
+
+The HARRIS detector family produces the most inconsistent results, particularly HARRIS/BRIEF (smoothness 0.050, mean change 19.14s, std 25.99s) and HARRIS/FREAK (smoothness 0.090, mean change 10.10s, std 24.46s). These combinations also have the highest number of invalid frames (only 14-16 out of 18 valid). The ORB detector also shows poor performance with ORB/FREAK (smoothness 0.050, mean change 19.11s) and ORB/SIFT (smoothness 0.058, mean change 16.17s).
+
+**Root causes for large outliers:**
+
+The top outlier frames (2, 4, 8, 15, 14) share a common pattern: specific detector/descriptor combinations produce extreme TTC spikes (up to 94s vs a median of ~14s). The primary causes are:
+
+1. **Keypoint distribution sensitivity**: HARRIS detects keypoints clustered around corners with specific spatial distributions. When paired with certain descriptors, the resulting keypoint pairs have distances close to the `cameraMinDist` threshold (110.0), causing the median distance ratio to be very close to 1.0. Since TTC = -dT / (1 - ratio), a ratio near 1.0 produces very large TTC values.
+
+2. **Insufficient keypoint pairs**: Some combinations produce very few valid pairwise distance ratios after the minDist filter, making the median ratio unstable. For example, HARRIS/BRIEF in frame 2 has only 62 valid pairs (vs 547 for SHITOMASI/BRIEF in the same frame), and a few outlier ratios can significantly shift the median.
+
+3. **Descriptor mismatch**: The ORB detector produces keypoints that are incompatible with FREAK and SIFT descriptors in some frames, leading to poor matching quality and unstable distance ratios.
+
+4. **Frame-specific keypoint availability**: In early frames (frame 1), HARRIS combinations produce too few keypoint pairs (< 5) for a valid TTC, resulting in NaN. This explains the lower valid frame counts for HARRIS combinations.
+
+**Root-cause examples:**
+
+Each cause is illustrated below with a keypoint-match overlay for one representative detector/descriptor combination and frame. The overlays are produced by the C++ pipeline (see `showRootCauseKeypointOverlay` in `src/camFusion_Student.cpp` and the FP.6 root-cause hook in `src/FinalProject_Camera.cpp`), so the annotated TTC, match, and pair counts match the CSV exactly. Orange = previous-frame bounding box / keypoints, green = current frame, lines connect matched keypoint pairs within the tracked vehicle.
+
+1. **Keypoint distribution sensitivity** — HARRIS/SIFT, frame 8. Plenty of matches (91) and valid pairs (250), yet TTC = 73.6 s because the median distance ratio sits at 1.0014 (near 1.0). The supporting histogram shows the ratio distribution clustered around 1.0.
+
+    ![RC1 overlay](analysis/output/rootcause_rc1_harris_sift_f8.png)
+    *Figure: HARRIS/SIFT, frame 8. The keypoints are spatially clustered around a few corners; even with 250 valid pairs the median ratio is ~1.0, driving TTC to 73.6 s.*
+
+2. **Insufficient keypoint pairs** — HARRIS/BRIEF, frame 2. Only 62 valid distance-ratio pairs (vs 547 for SHITOMASI/BRIEF), so the median ratio is easily pulled toward 1.0, producing TTC = 94.0 s.
+
+    ![RC2 overlay](analysis/output/rootcause_rc2_harris_brief_f2.png)
+    *Figure: HARRIS/BRIEF, frame 2. Few keypoints fall inside the bounding box, leaving only 62 valid pairs; the unstable median gives TTC = 94.0 s.*
+
+3. **Descriptor mismatch** — ORB/FREAK, frame 14. The FREAK descriptor cannot describe most ORB keypoints, so the keypoint count drops from 500 to 192 and only 23 matches / 28 valid pairs remain, yielding TTC = 54.2 s.
+
+    ![RC3 overlay](analysis/output/rootcause_rc3_orb_freak_f14.png)
+    *Figure: ORB/FREAK, frame 14. FREAK drops most ORB keypoints (500 -> 192), leaving very few matches and an unstable TTC of 54.2 s.*
+
+4. **Frame-specific keypoint availability** — HARRIS/BRIEF, frame 1. The preceding vehicle is still far/small, so only 28 matches and 2 valid pairs survive — below the 5-pair minimum, so TTC is NaN.
+
+    ![RC4 overlay](analysis/output/rootcause_rc4_harris_brief_f1.png)
+    *Figure: HARRIS/BRIEF, frame 1. With only 2 valid pairs (< 5 threshold) the TTC is undefined (NaN), which is why HARRIS combinations have fewer valid frames.*
+
+The next plot statistically summarizes the above observed examples of the different root causes.
+
+![FP.6 Root-Cause Analysis](analysis/output/fp6_rootcause_analysis.png)
+*Figure: Top-left (RC1): distance-ratio histogram for HARRIS/SIFT frame 8 — median 1.0014 -> TTC 73.6 s. Top-right (RC2): valid pairs per detector at frame 2 — HARRIS (62) vs the others. Bottom-left (RC3): mean ORB keypoint count by descriptor — FREAK drops 500 to ~180. Bottom-right (RC4): HARRIS/BRIEF valid pairs per frame — frame 1 (2 pairs) is below the 5-pair threshold and yields NaN.*
+
+To regenerate the overlays and ratio data, rebuild and run the C++ pipeline with `bTestAllCombinationsTTC = true`; the root-cause hook writes `rootcause_rc*.png` and `rootcause_ratios_*.csv` to `analysis/output/`. Then run `python analysis/fp6_rootcause_analysis.py` (from the `analysis/` directory) to produce the summary figure.
+
+**Comparison with Lidar:**
+
+The best-performing combinations (SHITOMASI family, SIFT family) produce TTC curves that track the Lidar UNFILTERED reference closely, with mean TTC values around 11-13s and standard deviations of 1.3-2.4s. This is consistent with the FP.4 results using SHITOMASI/ORB (mean 12.13s, std 1.65s). The worst combinations produce TTC values that deviate largely from the lidar reference, confirming that the detector/descriptor choice significantly impacts camera-based TTC estimation quality.
+
+To run the FP.6 analysis:
+```bash
+# Enable combination TTC testing in FinalProject_Camera.cpp (bTestAllCombinationsTTC = true)
+# Build and run the program
+cd build && make && ./3D_object_tracking
+
+# Run the FP.6 analysis script (from project root)
+cd analysis && source .venv/bin/activate && python fp6_analysis.py
+
+# Or from any directory with explicit paths
+python analysis/fp6_analysis.py --csv analysis/output/ttc_camera_combinations.csv \
+  --lidar-csv analysis/output/ttc_lidar_comparison.csv --output analysis/output
+
+# Generate the root-cause example overlays + summary figure (requires the C++ run above)
+python analysis/fp6_rootcause_analysis.py --csv analysis/output/ttc_camera_combinations.csv \
+  --output analysis/output
+```
+
 
